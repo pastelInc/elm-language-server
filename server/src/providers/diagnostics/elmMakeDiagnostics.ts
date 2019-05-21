@@ -1,11 +1,6 @@
 import * as cp from "child_process";
 import * as readline from "readline";
-import {
-  Diagnostic,
-  DiagnosticSeverity,
-  IConnection,
-  Range,
-} from "vscode-languageserver";
+import { IConnection } from "vscode-languageserver";
 import URI from "vscode-uri";
 import * as utils from "../../util/elmUtils";
 import { Settings } from "../../util/settings";
@@ -132,34 +127,5 @@ export class ElmMakeDiagnostics {
         resolve(lines);
       });
     });
-  }
-
-  private severityStringToDiagnosticSeverity(
-    severity: string,
-  ): DiagnosticSeverity {
-    switch (severity) {
-      case "error":
-        return DiagnosticSeverity.Error;
-      case "warning":
-        return DiagnosticSeverity.Warning;
-      default:
-        return DiagnosticSeverity.Error;
-    }
-  }
-
-  private elmMakeIssueToDiagnostic(issue: IElmIssue): Diagnostic {
-    const lineRange: Range = Range.create(
-      issue.region.start.line - 1,
-      issue.region.start.column - 1,
-      issue.region.end.line - 1,
-      issue.region.end.column - 1,
-    );
-    return Diagnostic.create(
-      lineRange,
-      issue.overview + " - " + issue.details.replace(/\[\d+m/g, ""),
-      this.severityStringToDiagnosticSeverity(issue.type),
-      undefined,
-      "Elm",
-    );
   }
 }

@@ -10,6 +10,8 @@ import { DocumentEvents } from "../../util/documentEvents";
 import { TextDocumentEvents } from "../../util/textDocumentEvents";
 import { ElmAnalyseDiagnostics } from "./elmAnalyseDiagnostics";
 import { ElmMakeDiagnostics } from "./elmMakeDiagnostics";
+import { IForest } from "../../forest";
+import { TreeSitterDiagnostics } from "./treeSitterDiagnostics";
 
 export interface IElmIssueRegion {
   start: { line: number; column: number };
@@ -30,19 +32,23 @@ export class DiagnosticsProvider {
   private events: TextDocumentEvents;
   private elmMakeDiagnostics: ElmMakeDiagnostics;
   private elmAnalyseDiagnostics: ElmAnalyseDiagnostics;
+  private treeSitterDiagnostics: TreeSitterDiagnostics;
   private currentDiagnostics: {
     elmMake: Map<string, Diagnostic[]>;
     elmAnalyse: Map<string, Diagnostic[]>;
+    treeSitter: Map<string, Diagnostic[]>;
   };
 
   constructor(
     private connection: IConnection,
     private elmWorkspaceFolder: URI,
     documentEvents: DocumentEvents,
+    private forest: IForest,
   ) {
     this.getDiagnostics = this.getDiagnostics.bind(this);
     this.newElmAnalyseDiagnostics = this.newElmAnalyseDiagnostics.bind(this);
     this.elmMakeIssueToDiagnostic = this.elmMakeIssueToDiagnostic.bind(this);
+    this.newTreeSitterDiagnostics = this.newTreeSitterDiagnostics.bind(this);
     this.events = new TextDocumentEvents(documentEvents);
 
     this.connection = connection;
@@ -58,7 +64,18 @@ export class DiagnosticsProvider {
       this.newElmAnalyseDiagnostics,
     );
 
-    this.currentDiagnostics = { elmMake: new Map(), elmAnalyse: new Map() };
+    this.treeSitterDiagnostics = new TreeSitterDiagnostics(
+      connection,
+      elmWorkspaceFolder,
+      this.forest,
+      this.newTreeSitterDiagnostics,
+    );
+
+    this.currentDiagnostics = {
+      elmMake: new Map(),
+      elmAnalyse: new Map(),
+      treeSitter: new Map(),
+    };
 
     this.events.on("open", this.getDiagnostics);
     this.events.on("change", this.getDiagnostics);
@@ -70,10 +87,22 @@ export class DiagnosticsProvider {
     this.sendDiagnostics();
   }
 
+  private newTreeSitterDiagnostics(diagnostics: Map<string, Diagnostic[]>) {
+    this.currentDiagnostics.treeSitter = diagnostics;
+    this.sendDiagnostics();
+  }
+
   private sendDiagnostics() {
     const allDiagnostics: Map<string, Diagnostic[]> = new Map();
     for (const [uri, diagnostics] of this.currentDiagnostics.elmAnalyse) {
       allDiagnostics.set(uri, diagnostics);
+    }
+
+    for (const [uri, diagnostics] of this.currentDiagnostics.treeSitter) {
+      allDiagnostics.set(
+        uri,
+        (allDiagnostics.get(uri) || []).concat(diagnostics),
+      );
     }
 
     for (const [uri, diagnostics] of this.currentDiagnostics.elmMake) {
@@ -93,6 +122,7 @@ export class DiagnosticsProvider {
     const text = document.getText();
 
     this.elmAnalyseDiagnostics.updateFile(uri, text);
+    this.treeSitterDiagnostics.createDiagnostics(uri);
 
     const compilerErrors: IElmIssue[] = [];
     compilerErrors.push(
