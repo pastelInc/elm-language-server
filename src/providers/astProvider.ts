@@ -54,8 +54,8 @@ export class ASTProvider {
 
   protected initializeWorkspace = async (): Promise<void> => {
     try {
-      const path = this.elmWorkspace.fsPath + "elm.json";
-      this.connection.console.info("Reading elm.json from " + path);
+      const path = this.elmWorkspace.fsPath + "elm-package.json";
+      this.connection.console.info("Reading elm-package.json from " + path);
       // Find elm files and feed them to tree sitter
       const elmJson = require(path);
       const type = elmJson.type;

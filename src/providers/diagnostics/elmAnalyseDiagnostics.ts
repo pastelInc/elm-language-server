@@ -34,7 +34,6 @@ export class ElmAnalyseDiagnostics {
   public updateFile(uri: URI, text?: string): void {
     this.elmAnalyse.then(elmAnalyse => {
       elmAnalyse.ports.fileWatch.send({
-        content: text || null,
         event: "update",
         file: path.relative(this.elmWorkspace.fsPath, uri.fsPath),
       });
@@ -43,17 +42,11 @@ export class ElmAnalyseDiagnostics {
 
   private async setupElmAnalyse(): Promise<ElmApp> {
     const fsPath = this.elmWorkspace.fsPath;
-    const elmJson = await readFile(path.join(fsPath, "elm.json"), {
-      encoding: "utf-8",
-    }).then(JSON.parse);
     const fileLoadingPorts = require("elm-analyse/dist/app/file-loading-ports.js");
-    const { Elm } = require("elm-analyse/dist/app/backend-elm.js");
-    const elmAnalyse = Elm.Analyser.init({
-      flags: {
-        project: elmJson,
-        registry: [],
-        server: false,
-      },
+    const Elm = require("elm-analyse/dist/app/backend-elm.js");
+    const elmAnalyse = Elm.Analyser.worker({
+      registry: [],
+      server: false,
     });
 
     // elm-analyse breaks if there is a trailing slash on the path, it tries to
@@ -101,6 +94,19 @@ export class ElmAnalyseDiagnostics {
 
 function messageToDiagnostic(message: Message): Diagnostic {
   if (message.type === "FileLoadFailed") {
+    return {
+      code: "1",
+      message: "Error parsing file",
+      range: {
+        end: { line: 1, character: 0 },
+        start: { line: 0, character: 0 },
+      },
+      severity: DiagnosticSeverity.Error,
+      source: "elm-analyse",
+    };
+  }
+
+  if (!message.data.properties.range) {
     return {
       code: "1",
       message: "Error parsing file",
