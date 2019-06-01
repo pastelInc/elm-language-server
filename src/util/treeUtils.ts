@@ -3,6 +3,7 @@ import { IImport, IImports } from "../imports";
 
 export type NodeType =
   | "Function"
+  | "FunctionParameter"
   | "TypeAlias"
   | "Type"
   | "Operator"
@@ -449,10 +450,7 @@ export class TreeUtils {
   public static findAllFunctionDeclarations(
     tree: Tree,
   ): SyntaxNode[] | undefined {
-    const functions = this.findAllNamedChildsOfType(
-      "value_declaration",
-      tree.rootNode,
-    );
+    const functions = tree.rootNode.descendantsOfType("value_declaration");
     return functions;
   }
 
@@ -513,7 +511,15 @@ export class TreeUtils {
   ): SyntaxNode[] | undefined {
     const functions = this.findAllFunctionCalls(tree);
     if (functions) {
-      return functions.filter(a => a.text === functionName);
+      const callSites = functions.filter(a => a.text === functionName);
+      return callSites.map(a => {
+        const functionNode = a.descendantsOfType("lower_case_identifier");
+        if (functionNode) {
+          return functionNode[0];
+        } else {
+          return a;
+        }
+      });
     }
   }
 
@@ -549,10 +555,7 @@ export class TreeUtils {
     tree: Tree,
     nodeAtPosition: SyntaxNode,
   ): SyntaxNode | undefined {
-    let definitionNode;
-    definitionNode = this.findFunction(tree, nodeAtPosition.text);
-
-    return definitionNode;
+    return this.findFunction(tree, nodeAtPosition.text);
   }
 
   public static findUppercaseQidNode(
@@ -611,6 +614,98 @@ export class TreeUtils {
         return {
           node: definitionFromOtherFile.node,
           nodeType: "Module",
+          uri: definitionFromOtherFile.fromUri,
+        };
+      }
+    } else if (
+      nodeAtPosition.parent &&
+      nodeAtPosition.parent.type === "exposed_value" &&
+      nodeAtPosition.parent.parent &&
+      nodeAtPosition.parent.parent.parent &&
+      nodeAtPosition.parent.parent.parent.type === "module_declaration"
+    ) {
+      const definitionNode = TreeUtils.findLowercaseQidNode(
+        tree,
+        nodeAtPosition,
+      );
+
+      if (definitionNode) {
+        return {
+          node: definitionNode,
+          nodeType: "Function",
+          uri,
+        };
+      }
+    } else if (
+      nodeAtPosition.parent &&
+      nodeAtPosition.parent.type === "exposed_type" &&
+      nodeAtPosition.parent.parent &&
+      nodeAtPosition.parent.parent.parent &&
+      nodeAtPosition.parent.parent.parent.type === "module_declaration"
+    ) {
+      const upperCaseQid = nodeAtPosition;
+      const definitionNode = TreeUtils.findUppercaseQidNode(tree, upperCaseQid);
+
+      if (definitionNode) {
+        return {
+          node: definitionNode.node,
+          nodeType: definitionNode.nodeType,
+          uri,
+        };
+      }
+    } else if (
+      nodeAtPosition.parent &&
+      nodeAtPosition.parent.type === "exposed_value" &&
+      nodeAtPosition.parent.parent &&
+      nodeAtPosition.parent.parent.parent &&
+      nodeAtPosition.parent.parent.parent.type === "import_clause"
+    ) {
+      const definitionFromOtherFile = this.findImportFromImportList(
+        uri,
+        nodeAtPosition.text,
+        "Function",
+        imports,
+      );
+
+      if (definitionFromOtherFile) {
+        return {
+          node: definitionFromOtherFile.node,
+          nodeType: "Function",
+          uri: definitionFromOtherFile.fromUri,
+        };
+      }
+    } else if (
+      nodeAtPosition.parent &&
+      nodeAtPosition.parent.type === "exposed_type" &&
+      nodeAtPosition.parent.parent &&
+      nodeAtPosition.parent.parent.parent &&
+      nodeAtPosition.parent.parent.parent.type === "import_clause"
+    ) {
+      const upperCaseQid = nodeAtPosition;
+      let definitionFromOtherFile = this.findImportFromImportList(
+        uri,
+        upperCaseQid.text,
+        "Type",
+        imports,
+      );
+      if (definitionFromOtherFile) {
+        return {
+          node: definitionFromOtherFile.node,
+          nodeType: "Type",
+          uri: definitionFromOtherFile.fromUri,
+        };
+      }
+
+      definitionFromOtherFile = this.findImportFromImportList(
+        uri,
+        upperCaseQid.text,
+        "TypeAlias",
+        imports,
+      );
+      if (definitionFromOtherFile) {
+        return {
+          node: definitionFromOtherFile.node,
+          nodeType: "TypeAlias",
           uri: definitionFromOtherFile.fromUri,
         };
       }
@@ -691,6 +786,19 @@ export class TreeUtils {
       nodeAtPosition.parent &&
       nodeAtPosition.parent.type === "value_qid"
     ) {
+      const functionParameter = this.findFunctionParameterDefinition(
+        nodeAtPosition,
+        nodeAtPosition.text,
+      );
+
+      if (functionParameter) {
+        return {
+          node: functionParameter,
+          nodeType: "FunctionParameter",
+          uri,
+        };
+      }
+
       const definitionNode = TreeUtils.findLowercaseQidNode(
         tree,
         nodeAtPosition.parent,
@@ -761,6 +869,38 @@ export class TreeUtils {
     }
   }
 
+  public static findFunctionParameterDefinition(
+    node: SyntaxNode,
+    functionParameterName: string,
+  ): SyntaxNode | undefined {
+    if (node.parent) {
+      if (
+        node.parent.type === "value_declaration" &&
+        node.parent.firstChild &&
+        node.parent.firstChild.type === "function_declaration_left"
+      ) {
+        if (node.parent.firstChild) {
+          const match = node.parent.firstChild.children.find(
+            a => a.type === "lower_pattern" && a.text === functionParameterName,
+          );
+          if (match) {
+            return match;
+          } else {
+            return this.findFunctionParameterDefinition(
+              node.parent,
+              functionParameterName,
+            );
+          }
+        }
+      } else {
+        return this.findFunctionParameterDefinition(
+          node.parent,
+          functionParameterName,
+        );
+      }
+    }
+  }
+
   public static findImportFromImportList(
     uri: string,
     nodeName: string,
@@ -791,7 +931,7 @@ export class TreeUtils {
     }
   }
 
-  public static findImportNameNode(
+  public static findImportClauseByName(
     tree: Tree,
     moduleName: string,
   ): SyntaxNode | undefined {
@@ -803,6 +943,24 @@ export class TreeUtils {
           a.children[1].type === "upper_case_qid" &&
           a.children[1].text === moduleName,
       );
+    }
+  }
+
+  public static findImportNameNode(
+    tree: Tree,
+    moduleName: string,
+  ): SyntaxNode | undefined {
+    const allImports = this.findAllImportNameNodes(tree);
+    if (allImports) {
+      const match = allImports.find(
+        a =>
+          a.children.length > 1 &&
+          a.children[1].type === "upper_case_qid" &&
+          a.children[1].text === moduleName,
+      );
+      if (match) {
+        return match.children[1];
+      }
     }
   }
 }

@@ -52,9 +52,17 @@ export class ElmAnalyseDiagnostics {
     // elm-analyse breaks if there is a trailing slash on the path, it tries to
     // read <dir>//elm.json instead of <div>/elm.json
     fileLoadingPorts.setup(elmAnalyse, {}, fsPath.replace(/[\\/]?$/, ""));
-    elmAnalyse.ports.sendReportValue.subscribe(this.onNewReport);
 
-    return elmAnalyse;
+    return new Promise(resolve => {
+      // Wait for elm-analyse to send back the first report
+      const cb = (firstReport: any) => {
+        elmAnalyse.ports.sendReportValue.unsubscribe(cb);
+        this.onNewReport(firstReport);
+        elmAnalyse.ports.sendReportValue.subscribe(this.onNewReport);
+        resolve(elmAnalyse);
+      };
+      elmAnalyse.ports.sendReportValue.subscribe(cb);
+    });
   }
 
   private onNewReport = (report: Report) => {
@@ -70,7 +78,7 @@ export class ElmAnalyseDiagnostics {
           path.join(this.elmWorkspace.fsPath, message.file),
         ).toString();
         const arr = acc.get(uri) || [];
-        arr.push(messageToDiagnostic(message));
+        arr.push(this.messageToDiagnostic(message));
         acc.set(uri, arr);
         return acc;
       },
@@ -90,50 +98,55 @@ export class ElmAnalyseDiagnostics {
     filesThatAreNowFixed.forEach(file => diagnostics.set(file, []));
     this.onNewDiagnostics(diagnostics);
   };
-}
 
-function messageToDiagnostic(message: Message): Diagnostic {
-  if (message.type === "FileLoadFailed") {
+  private messageToDiagnostic(message: Message): Diagnostic {
+    if (message.type === "FileLoadFailed") {
+      return {
+        code: "1",
+        message: "Error parsing file",
+        range: {
+          end: { line: 1, character: 0 },
+          start: { line: 0, character: 0 },
+        },
+        severity: DiagnosticSeverity.Error,
+        source: "elm-analyse",
+      };
+    }
+
+    if (!message.data.properties.range) {
+      return {
+        code: "1",
+        message: "Error parsing file",
+        range: {
+          end: { line: 1, character: 0 },
+          start: { line: 0, character: 0 },
+        },
+        severity: DiagnosticSeverity.Error,
+        source: "elm-analyse",
+      };
+    }
+
+    const [
+      lineStart,
+      colStart,
+      lineEnd,
+      colEnd,
+    ] = message.data.properties.range;
+    const range = {
+      end: { line: lineEnd - 1, character: colEnd - 1 },
+      start: { line: lineStart - 1, character: colStart - 1 },
+    };
     return {
-      code: "1",
-      message: "Error parsing file",
-      range: {
-        end: { line: 1, character: 0 },
-        start: { line: 0, character: 0 },
-      },
-      severity: DiagnosticSeverity.Error,
+      code: message.id,
+      // Clean up the error message a bit, removing the end of the line, e.g.
+      // "Record has only one field. Use the field's type or introduce a Type. At ((14,5),(14,20))"
+      message:
+        message.data.description.split(/at .+$/i)[0] +
+        "\n" +
+        `See https://stil4m.github.io/elm-analyse/#/messages/${message.type}`,
+      range,
+      severity: DiagnosticSeverity.Warning,
       source: "elm-analyse",
     };
   }
-
-  if (!message.data.properties.range) {
-    return {
-      code: "1",
-      message: "Error parsing file",
-      range: {
-        end: { line: 1, character: 0 },
-        start: { line: 0, character: 0 },
-      },
-      severity: DiagnosticSeverity.Error,
-      source: "elm-analyse",
-    };
-  }
-
-  const [lineStart, colStart, lineEnd, colEnd] = message.data.properties.range;
-  const range = {
-    end: { line: lineEnd - 1, character: colEnd - 1 },
-    start: { line: lineStart - 1, character: colStart - 1 },
-  };
-  return {
-    code: message.id,
-    // Clean up the error message a bit, removing the end of the line, e.g.
-    // "Record has only one field. Use the field's type or introduce a Type. At ((14,5),(14,20))"
-    message:
-      message.data.description.split(/at .+$/i)[0] +
-      "\n" +
-      `See https://stil4m.github.io/elm-analyse/#/messages/${message.type}`,
-    range,
-    severity: DiagnosticSeverity.Warning,
-    source: "elm-analyse",
-  };
 }
