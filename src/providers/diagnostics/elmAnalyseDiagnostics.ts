@@ -20,6 +20,7 @@ import * as Diff from "../../util/diff";
 import { IClientSettings, Settings } from "../../util/settings";
 import { TextDocumentEvents } from "../../util/textDocumentEvents";
 import { DocumentFormattingProvider } from "../documentFormatingProvider";
+import * as utils from "../../util/elmUtils";
 
 const readFile = util.promisify(fs.readFile);
 const fixableErrors = [
@@ -269,8 +270,20 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
   }
 
   private async setupElmAnalyse(): Promise<ElmApp> {
+    let elmVersion;
+    try {
+      elmVersion = await utils.getElmVersion(
+        await this.settings.getClientSettings(),
+        this.elmWorkspace,
+        this.connection,
+      );
+    } catch (e) {
+      this.connection.console.warn(
+        `Could not figure out elm version, this will impact how good the server works. \n ${e.stack}`,
+      );
+    }
     const fsPath = this.elmWorkspace.fsPath;
-    const elmJson = await readFile(path.join(fsPath, "elm.json"), {
+    const elmJson = await readFile(path.join(fsPath, this.elmJsonOrElmPackageJson(elmVersion)), {
       encoding: "utf-8",
     }).then(JSON.parse);
     const fileLoadingPorts = require("elm-analyse/dist/app/file-loading-ports.js");
@@ -371,5 +384,12 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
       severity: DiagnosticSeverity.Warning,
       source: ELM_ANALYSE,
     };
+  }
+
+  private elmJsonOrElmPackageJson(elmVersion : string | undefined) {
+    if (elmVersion === '0.18.0') {
+      return 'elm-package.json'
+    }
+    return 'elm.json'
   }
 }

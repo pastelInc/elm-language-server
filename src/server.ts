@@ -36,7 +36,7 @@ export class Server implements ILanguageServer {
     if (uri) {
       // Cleanup the path on windows, as globby does not like backslashes
       const globUri = uri.fsPath.replace(/\\/g, "/");
-      const elmJsonGlob = `${globUri}/**/elm.json`;
+      const elmJsonGlob = `${globUri}/**/{elm.json|elm-package.json}`;
 
       const elmJsons = globby.sync([
         elmJsonGlob,
@@ -94,7 +94,7 @@ export class Server implements ILanguageServer {
   }
 
   private getElmJsonFolder(uri: string): URI {
-    return URI.file(uri.replace("elm.json", ""));
+    return URI.file(uri.replace("elm.json", "").replace("elm-package.json", ""));
   }
 
   private findTopLevelFolders(listOfElmJsonFolders: URI[]) {

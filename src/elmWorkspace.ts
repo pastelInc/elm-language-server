@@ -255,6 +255,9 @@ export class ElmWorkspace {
   }
 
   private packageOrPackagesFolder(elmVersion: string | undefined): string {
+    if (elmVersion === "0.18.0") {
+      return "package";
+    }
     return elmVersion === "0.19.0" ? "package" : "packages";
   }
 
