@@ -133,8 +133,8 @@ export class ElmWorkspace {
       );
     }
     try {
-      const path = `${this.elmWorkspace.fsPath}elm.json`;
-      this.connection.console.info(`Reading elm.json from ${path}`);
+      const path = `${this.elmWorkspace.fsPath}${this.elmJsonOrElmPackageJson(elmVersion)}`;
+      this.connection.console.info(`Reading ${this.elmJsonOrElmPackageJson(elmVersion)} from ${path}`);
       // Find elm files and feed them to tree sitter
       const elmJson = require(path);
       const type = elmJson.type;
@@ -245,6 +245,13 @@ export class ElmWorkspace {
     return globby
       .sync(`${element[0]}/**/*.elm`)
       .map(path => ({ path, writable: element[1] }));
+  }
+
+  private elmJsonOrElmPackageJson(elmVersion : string | undefined) {
+    if (elmVersion === '0.18.0') {
+      return 'elm-package.json'
+    }
+    return 'elm.json'
   }
 
   private packageOrPackagesFolder(elmVersion: string | undefined): string {
