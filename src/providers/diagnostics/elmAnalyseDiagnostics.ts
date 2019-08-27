@@ -1,32 +1,73 @@
-import { ElmApp, Message, Report } from "elm-analyse/ts/domain";
+import * as crypto from "crypto";
+import { ElmApp, FixedFile, Message, Report } from "elm-analyse/ts/domain";
+import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
 import util from "util";
 import {
+  CodeAction,
+  CodeActionKind,
+  CodeActionParams,
   Diagnostic,
   DiagnosticSeverity,
+  ExecuteCommandParams,
   IConnection,
+  TextDocument,
+  TextEdit,
 } from "vscode-languageserver";
-import URI from "vscode-uri";
+import { URI } from "vscode-uri";
+import * as Diff from "../../util/diff";
+import { IClientSettings, Settings } from "../../util/settings";
+import { TextDocumentEvents } from "../../util/textDocumentEvents";
+import { DocumentFormattingProvider } from "../documentFormatingProvider";
 
 const readFile = util.promisify(fs.readFile);
-type INewDiagnosticsCallback = (diagnostics: Map<string, Diagnostic[]>) => void;
+const fixableErrors = [
+  "UnnecessaryParens",
+  "UnusedImport",
+  "UnusedImportedVariable",
+  "UnusedImportAlias",
+  "UnusedPatternVariable",
+  "UnusedTypeAlias",
+  "MultiLineRecordFormatting",
+  "DropConsOfItemAndList",
+  "DuplicateImport",
+];
+const ELM_ANALYSE = "elm-analyse";
+const RANDOM_ID = crypto.randomBytes(16).toString("hex");
+export const CODE_ACTION_ELM_ANALYSE = `elmLS.elmAnalyseFixer-${RANDOM_ID}`;
+export const CODE_ACTION_ELM_ANALYSE_FIX_ALL = `elmLS.elmAnalyseFixer.fixAll-${RANDOM_ID}`;
 
-export class ElmAnalyseDiagnostics {
+export interface IElmAnalyseEvents {
+  on(event: "new-report", diagnostics: Map<string, Diagnostic[]>): this;
+}
+
+export class ElmAnalyseDiagnostics extends EventEmitter {
   private connection: IConnection;
   private elmWorkspace: URI;
   private elmAnalyse: Promise<ElmApp>;
-  private filesWithDiagnostics = new Set();
-  private onNewDiagnostics: INewDiagnosticsCallback;
+  private diagnostics: Map<string, Diagnostic[]>;
+  private filesWithDiagnostics: Set<string> = new Set();
+  private events: TextDocumentEvents;
+  private settings: Settings;
+  private formattingProvider: DocumentFormattingProvider;
 
   constructor(
     connection: IConnection,
     elmWorkspace: URI,
-    onNewDiagnostics: INewDiagnosticsCallback,
+    events: TextDocumentEvents,
+    settings: Settings,
+    formattingProvider: DocumentFormattingProvider,
   ) {
+    super();
     this.connection = connection;
     this.elmWorkspace = elmWorkspace;
-    this.onNewDiagnostics = onNewDiagnostics;
+    this.onExecuteCommand = this.onExecuteCommand.bind(this);
+    this.onCodeAction = this.onCodeAction.bind(this);
+    this.events = events;
+    this.settings = settings;
+    this.formattingProvider = formattingProvider;
+    this.diagnostics = new Map();
 
     this.elmAnalyse = this.setupElmAnalyse();
   }
@@ -34,19 +75,212 @@ export class ElmAnalyseDiagnostics {
   public updateFile(uri: URI, text?: string): void {
     this.elmAnalyse.then(elmAnalyse => {
       elmAnalyse.ports.fileWatch.send({
+        content: text || null,
         event: "update",
         file: path.relative(this.elmWorkspace.fsPath, uri.fsPath),
       });
     });
   }
 
+  public onCodeAction(params: CodeActionParams): CodeAction[] {
+    const { uri } = params.textDocument;
+
+    // The `CodeActionParams` will only have diagnostics for the region we were in, for the
+    // "Fix All" feature we need to know about all of the fixable things in the document
+    const fixableDiagnostics = this.fixableDiagnostics(
+      this.diagnostics.get(uri.toString()) || [],
+    );
+
+    const fixAllInFile: CodeAction[] =
+      fixableDiagnostics.length > 1
+        ? [
+            {
+              command: {
+                arguments: [uri],
+                command: CODE_ACTION_ELM_ANALYSE_FIX_ALL,
+                title: `Fix all ${fixableDiagnostics.length} issues`,
+              },
+              diagnostics: fixableDiagnostics,
+              kind: CodeActionKind.QuickFix,
+              title: `Fix all ${fixableDiagnostics.length} issues`,
+            },
+          ]
+        : [];
+
+    const contextDiagnostics: CodeAction[] = this.fixableDiagnostics(
+      params.context.diagnostics,
+    ).map(diagnostic => {
+      const title = diagnostic.message.split("\n")[0];
+      return {
+        command: {
+          arguments: [uri, diagnostic],
+          command: CODE_ACTION_ELM_ANALYSE,
+          title,
+        },
+        diagnostics: [diagnostic],
+        kind: CodeActionKind.QuickFix,
+        title,
+      };
+    });
+
+    return contextDiagnostics.length > 0
+      ? contextDiagnostics.concat(fixAllInFile)
+      : [];
+  }
+
+  public async onExecuteCommand(params: ExecuteCommandParams) {
+    let uri: URI;
+    switch (params.command) {
+      case CODE_ACTION_ELM_ANALYSE:
+        if (!params.arguments || params.arguments.length !== 2) {
+          this.connection.console.warn(
+            "Received incorrect number of arguments for elm-analyse fixer. Returning early.",
+          );
+          return;
+        }
+        uri = params.arguments[0];
+        const diagnostic: Diagnostic = params.arguments[1];
+        const code: number =
+          typeof diagnostic.code === "number" ? diagnostic.code : -1;
+
+        if (code === -1) {
+          this.connection.console.warn(
+            "Unable to apply elm-analyse fix, unknown diagnostic code",
+          );
+          return;
+        }
+        return this.fixer(uri, code);
+      case CODE_ACTION_ELM_ANALYSE_FIX_ALL:
+        if (!params.arguments || params.arguments.length !== 1) {
+          this.connection.console.warn(
+            "Received incorrect number of arguments for elm-analyse fixer. Returning early.",
+          );
+          return;
+        }
+        uri = params.arguments[0];
+        return this.fixer(uri);
+    }
+  }
+
+  private fixableDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
+    return diagnostics.filter(
+      diagnostic =>
+        diagnostic.source === ELM_ANALYSE && this.isFixable(diagnostic),
+    );
+  }
+
+  /**
+   * If a diagnosticId is provided it will fix the single issue, if no
+   * id is provided it will fix the entire file.
+   */
+  private async fixer(uri: URI, diagnosticId?: number) {
+    const elmAnalyse = await this.elmAnalyse;
+    const settings = await this.settings.getClientSettings();
+
+    const edits = await this.getFixEdits(
+      elmAnalyse,
+      uri,
+      settings,
+      diagnosticId,
+    );
+
+    return this.connection.workspace.applyEdit({
+      changes: {
+        [uri.toString()]: edits,
+      },
+    });
+  }
+
+  private async getFixEdits(
+    elmAnalyse: ElmApp,
+    uri: URI,
+    settings: IClientSettings,
+    code?: number,
+  ): Promise<TextEdit[]> {
+    const filePath = URI.parse(uri.toString()).fsPath;
+    const relativePath = path.relative(this.elmWorkspace.fsPath, filePath);
+
+    return new Promise((resolve, reject) => {
+      // Naming the function here so that we can unsubscribe once we get the new file content
+      const onFixComplete = (fixedFile: FixedFile) => {
+        this.connection.console.info(
+          `Received fixed file from elm-analyse for path: ${filePath}`,
+        );
+        elmAnalyse.ports.sendFixedFile.unsubscribe(onFixComplete);
+        const oldText = this.events.get(uri.toString());
+        if (!oldText) {
+          return reject(
+            "Unable to apply elm-analyse fix, file content was unavailable.",
+          );
+        }
+
+        // This formats the fixed file with elm-format first and then figures out the
+        // diffs from there, this prevents needing to chain sets of edits
+        resolve(
+          this.formattingProvider
+            .formatText(settings.elmFormatPath, fixedFile.content)
+            .then(
+              async elmFormatEdits =>
+                await this.createEdits(
+                  oldText.getText(),
+                  fixedFile.content,
+                  elmFormatEdits,
+                ),
+            ),
+        );
+      };
+
+      elmAnalyse.ports.sendFixedFile.subscribe(onFixComplete);
+
+      if (typeof code === "number") {
+        this.connection.console.info(
+          `Sending elm-analyse fix request for diagnostic id: ${code}`,
+        );
+        elmAnalyse.ports.onFixQuick.send(code);
+      } else {
+        this.connection.console.info(
+          `Sending elm-analyse fix request for file: ${relativePath}`,
+        );
+        elmAnalyse.ports.onFixFileQuick.send(relativePath);
+      }
+    });
+  }
+
+  private async createEdits(
+    oldText: string,
+    newText: string,
+    elmFormatEdits: TextEdit[] | undefined,
+  ) {
+    if (elmFormatEdits) {
+      // Fake a `TextDocument` so that we can use `applyEdits` on `TextDocument`
+      const formattedFile = TextDocument.create(
+        "file://fakefile.elm",
+        "elm",
+        0,
+        newText,
+      );
+      return Diff.getTextRangeChanges(
+        oldText,
+        TextDocument.applyEdits(formattedFile, elmFormatEdits),
+      );
+    } else {
+      return Diff.getTextRangeChanges(oldText, newText);
+    }
+  }
+
   private async setupElmAnalyse(): Promise<ElmApp> {
     const fsPath = this.elmWorkspace.fsPath;
+    const elmJson = await readFile(path.join(fsPath, "elm.json"), {
+      encoding: "utf-8",
+    }).then(JSON.parse);
     const fileLoadingPorts = require("elm-analyse/dist/app/file-loading-ports.js");
-    const Elm = require("elm-analyse/dist/app/backend-elm.js");
-    const elmAnalyse = Elm.Analyser.worker({
-      registry: [],
-      server: false,
+    const { Elm } = require("elm-analyse/dist/app/backend-elm.js");
+    const elmAnalyse = Elm.Analyser.init({
+      flags: {
+        project: elmJson,
+        registry: [],
+        server: false,
+      },
     });
 
     // elm-analyse breaks if there is a trailing slash on the path, it tries to
@@ -66,25 +300,23 @@ export class ElmAnalyseDiagnostics {
   }
 
   private onNewReport = (report: Report) => {
-    this.connection.console.log(
+    this.connection.console.info(
       `Received new elm-analyse report with ${report.messages.length} messages`,
     );
+
     // When publishing diagnostics it looks like you have to publish
     // for one URI at a time, so this groups all of the messages for
     // each file and sends them as a batch
-    const diagnostics: Map<string, Diagnostic[]> = report.messages.reduce(
-      (acc, message) => {
-        const uri = URI.file(
-          path.join(this.elmWorkspace.fsPath, message.file),
-        ).toString();
-        const arr = acc.get(uri) || [];
-        arr.push(this.messageToDiagnostic(message));
-        acc.set(uri, arr);
-        return acc;
-      },
-      new Map(),
-    );
-    const filesInReport = new Set(diagnostics.keys());
+    this.diagnostics = report.messages.reduce((acc, message) => {
+      const uri = URI.file(
+        path.join(this.elmWorkspace.fsPath, message.file),
+      ).toString();
+      const arr = acc.get(uri) || [];
+      arr.push(this.messageToDiagnostic(message));
+      acc.set(uri, arr);
+      return acc;
+    }, new Map());
+    const filesInReport = new Set(this.diagnostics.keys());
     const filesThatAreNowFixed = new Set(
       [...this.filesWithDiagnostics].filter(
         uriPath => !filesInReport.has(uriPath),
@@ -95,9 +327,13 @@ export class ElmAnalyseDiagnostics {
 
     // When you fix the last error in a file it no longer shows up in the report, but
     // we still need to clear the error marker for it
-    filesThatAreNowFixed.forEach(file => diagnostics.set(file, []));
-    this.onNewDiagnostics(diagnostics);
+    filesThatAreNowFixed.forEach(file => this.diagnostics.set(file, []));
+    this.emit("new-diagnostics", this.diagnostics);
   };
+
+  private isFixable(diagnostic: Diagnostic): boolean {
+    return fixableErrors.some(e => diagnostic.message.indexOf(e) > -1);
+  }
 
   private messageToDiagnostic(message: Message): Diagnostic {
     if (message.type === "FileLoadFailed") {
@@ -109,29 +345,17 @@ export class ElmAnalyseDiagnostics {
           start: { line: 0, character: 0 },
         },
         severity: DiagnosticSeverity.Error,
-        source: "elm-analyse",
+        source: ELM_ANALYSE,
       };
     }
 
-    if (!message.data.properties.range) {
-      return {
-        code: "1",
-        message: "Error parsing file",
-        range: {
-          end: { line: 1, character: 0 },
-          start: { line: 0, character: 0 },
-        },
-        severity: DiagnosticSeverity.Error,
-        source: "elm-analyse",
-      };
-    }
+    const rangeDefaults = [1, 1, 2, 1];
+    const [lineStart, colStart, lineEnd, colEnd] =
+      (message.data &&
+        message.data.properties &&
+        message.data.properties.range) ||
+      rangeDefaults;
 
-    const [
-      lineStart,
-      colStart,
-      lineEnd,
-      colEnd,
-    ] = message.data.properties.range;
     const range = {
       end: { line: lineEnd - 1, character: colEnd - 1 },
       start: { line: lineStart - 1, character: colStart - 1 },
@@ -140,13 +364,12 @@ export class ElmAnalyseDiagnostics {
       code: message.id,
       // Clean up the error message a bit, removing the end of the line, e.g.
       // "Record has only one field. Use the field's type or introduce a Type. At ((14,5),(14,20))"
-      message:
-        message.data.description.split(/at .+$/i)[0] +
-        "\n" +
-        `See https://stil4m.github.io/elm-analyse/#/messages/${message.type}`,
+      message: `${
+        message.data.description.split(/at .+$/i)[0]
+      }\nSee https://stil4m.github.io/elm-analyse/#/messages/${message.type}`,
       range,
       severity: DiagnosticSeverity.Warning,
-      source: "elm-analyse",
+      source: ELM_ANALYSE,
     };
   }
 }

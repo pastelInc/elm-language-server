@@ -1,14 +1,58 @@
-import { SyntaxNode } from "tree-sitter";
+import { SyntaxNode } from "web-tree-sitter";
+import { TreeUtils } from "./treeUtils";
 
 export class HintHelper {
   public static createHint(node: SyntaxNode | undefined): string | undefined {
     if (node) {
       if (node.type === "module_declaration") {
         return this.createHintFromModule(node);
+      } else if (node.parent && node.parent.type === "let_in_expr") {
+        return this.createHintFromDefinitionInLet(node);
       } else {
         return this.createHintFromDefinition(node);
       }
     }
+  }
+
+  public static createHintFromFunctionParameter(
+    node: SyntaxNode | undefined,
+  ): string {
+    const annotation = TreeUtils.getTypeOrTypeAliasOfFunctionParameter(node);
+    if (annotation) {
+      return this.formatHint(annotation.text, "Local parameter");
+    }
+    return "Local parameter";
+  }
+
+  public static createHintForTypeAliasReference(
+    annotation: string,
+    fieldName: string,
+    parentName: string,
+  ): string {
+    return this.formatHint(
+      annotation,
+      `Refers to the \`${fieldName}\` field on \`${parentName}\``,
+    );
+  }
+
+  public static createHintFromDefinitionInLet(
+    declaration: SyntaxNode | undefined,
+  ) {
+    if (declaration) {
+      const comment: string = "Defined in local let scope";
+      let annotation: string = "";
+      if (declaration.previousNamedSibling) {
+        if (declaration.previousNamedSibling.type === "type_annotation") {
+          annotation = declaration.previousNamedSibling.text;
+        }
+        return this.formatHint(annotation, comment);
+      }
+    }
+  }
+
+  public static createHintFromDefinitionInCaseBranch() {
+    const comment: string = "Defined in local case branch";
+    return this.formatHint("", comment);
   }
 
   private static createHintFromDefinition(declaration: SyntaxNode | undefined) {

@@ -1,11 +1,10 @@
-import { SyntaxNode, Tree } from "tree-sitter";
 import {
   FoldingRange,
   FoldingRangeKind,
-  FoldingRangeRequest,
   FoldingRangeRequestParam,
   IConnection,
 } from "vscode-languageserver";
+import { SyntaxNode, Tree } from "web-tree-sitter";
 import { IForest } from "../forest";
 
 export class FoldingRangeProvider {
@@ -30,6 +29,7 @@ export class FoldingRangeProvider {
   protected handleFoldingRange = async (
     param: FoldingRangeRequestParam,
   ): Promise<FoldingRange[]> => {
+    this.connection.console.info(`Folding ranges were requested`);
     const folds: FoldingRange[] = [];
 
     const tree: Tree | undefined = this.forest.getTree(param.textDocument.uri);

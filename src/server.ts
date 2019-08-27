@@ -1,63 +1,78 @@
+import globby from "globby";
 import {
   Connection,
-  IConnection,
   InitializeParams,
   InitializeResult,
 } from "vscode-languageserver";
-import URI from "vscode-uri";
+import { URI } from "vscode-uri";
+import Parser from "web-tree-sitter";
 import { CapabilityCalculator } from "./capabilityCalculator";
-import { Forest } from "./forest";
-import { Imports } from "./imports";
-import { ASTProvider } from "./providers/astProvider";
-import { CodeLensProvider } from "./providers/codeLensProvider";
-import { CompletionProvider } from "./providers/completionProvider";
-import { DefinitionProvider } from "./providers/definitionProvider";
-import { DiagnosticsProvider } from "./providers/diagnostics/diagnosticsProvider";
-import { DocumentFormattingProvider } from "./providers/documentFormatingProvider";
-import { DocumentSymbolProvider } from "./providers/documentSymbolProvider";
-import { FoldingRangeProvider } from "./providers/foldingProvider";
-import { HoverProvider } from "./providers/hoverProvider";
-import { ReferencesProvider } from "./providers/referencesProvider";
-import { RenameProvider } from "./providers/renameProvider";
-import { WorkspaceSymbolProvider } from "./providers/workspaceSymbolProvider";
-import { DocumentEvents } from "./util/documentEvents";
+import { ElmWorkspace } from "./elmWorkspace";
 import { Settings } from "./util/settings";
 
 export interface ILanguageServer {
   readonly capabilities: InitializeResult;
+  init(): Promise<void>;
+  registerInitializedProviders(): void;
 }
 
 export class Server implements ILanguageServer {
   private calculator: CapabilityCalculator;
+  private settings: Settings;
+  private elmWorkspaceMap: Map<string, ElmWorkspace> = new Map();
 
-  constructor(connection: Connection, params: InitializeParams) {
+  constructor(
+    private connection: Connection,
+    private params: InitializeParams,
+    private parser: Parser,
+  ) {
     this.calculator = new CapabilityCalculator(params.capabilities);
-    const forest = new Forest();
-    const imports = new Imports();
 
-    const elmWorkspaceFallback =
-      // Add a trailing slash if not present
-      params.rootUri && params.rootUri.replace(/\/?$/, "/");
-    const elmWorkspace = URI.parse(
-      params.initializationOptions.elmWorkspace || elmWorkspaceFallback,
-    );
+    const initializationOptions = this.params.initializationOptions || {};
+    this.settings = new Settings(this.connection, initializationOptions);
 
-    const settings = new Settings(
-      params.capabilities,
-      params.initializationOptions,
-    );
+    const uri = this.getWorkspaceUri(params);
 
-    if (elmWorkspace) {
-      connection.console.info(`initializing - folder: "${elmWorkspace}"`);
-      this.registerProviders(
-        connection,
-        forest,
-        elmWorkspace,
-        imports,
-        settings,
-      );
+    if (uri) {
+      // Cleanup the path on windows, as globby does not like backslashes
+      const globUri = uri.fsPath.replace(/\\/g, "/");
+      const elmJsonGlob = `${globUri}/**/elm.json`;
+
+      const elmJsons = globby.sync([
+        elmJsonGlob,
+        "!**/node_modules/**",
+        "!**/elm-stuff/**",
+      ]);
+      if (elmJsons.length > 0) {
+        connection.console.info(
+          `Found ${elmJsons.length} elm.json files for workspace ${globUri}`,
+        );
+        const listOfElmJsonFolders = elmJsons.map(a =>
+          this.getElmJsonFolder(a),
+        );
+        const topLevelElmJsons: Map<string, URI> = this.findTopLevelFolders(
+          listOfElmJsonFolders,
+        );
+        connection.console.info(
+          `Found ${topLevelElmJsons.size} unique elmWorkspaces for workspace ${globUri}`,
+        );
+
+        topLevelElmJsons.forEach(elmWorkspace => {
+          this.elmWorkspaceMap.set(
+            elmWorkspace.toString(),
+            new ElmWorkspace(
+              elmWorkspace,
+              connection,
+              this.settings,
+              this.parser,
+            ),
+          );
+        });
+      } else {
+        this.connection.console.info(`No elm.json found`);
+      }
     } else {
-      connection.console.info(`No workspace.`);
+      this.connection.console.info(`No workspace was setup by the client`);
     }
   }
 
@@ -67,31 +82,48 @@ export class Server implements ILanguageServer {
     };
   }
 
-  private registerProviders(
-    connection: IConnection,
-    forest: Forest,
-    elmWorkspace: URI,
-    imports: Imports,
-    settings: Settings,
-  ): void {
-    const documentEvents = new DocumentEvents(connection);
-    // tslint:disable:no-unused-expression
-    new ASTProvider(connection, forest, elmWorkspace, documentEvents, imports);
-    new FoldingRangeProvider(connection, forest);
-    new CompletionProvider(connection, forest, imports);
-    new HoverProvider(connection, forest, imports);
-    new DiagnosticsProvider(connection, elmWorkspace, documentEvents, settings);
-    new DocumentFormattingProvider(
-      connection,
-      elmWorkspace,
-      documentEvents,
-      settings,
-    );
-    new DefinitionProvider(connection, forest, imports);
-    new ReferencesProvider(connection, forest, imports);
-    new DocumentSymbolProvider(connection, forest);
-    new WorkspaceSymbolProvider(connection, forest);
-    new CodeLensProvider(connection, forest, imports);
-    new RenameProvider(connection, forest, imports);
+  public async init() {
+    this.elmWorkspaceMap.forEach(it => it.init());
+  }
+
+  public async registerInitializedProviders() {
+    // We can now query the client for up to date settings
+    this.settings.initFinished();
+
+    this.elmWorkspaceMap.forEach(it => it.registerInitializedProviders());
+  }
+
+  private getElmJsonFolder(uri: string): URI {
+    return URI.file(uri.replace("elm.json", ""));
+  }
+
+  private findTopLevelFolders(listOfElmJsonFolders: URI[]) {
+    const result: Map<string, URI> = new Map();
+    listOfElmJsonFolders.forEach(element => {
+      result.set(element.toString(), element);
+    });
+
+    listOfElmJsonFolders.forEach(a => {
+      listOfElmJsonFolders.forEach(b => {
+        if (
+          b.toString() !== a.toString() &&
+          b.toString().startsWith(a.toString())
+        ) {
+          result.delete(b.toString());
+        }
+      });
+    });
+
+    return result;
+  }
+
+  private getWorkspaceUri(params: InitializeParams) {
+    if (params.rootUri) {
+      return URI.parse(params.rootUri);
+    } else if (params.rootPath) {
+      return URI.file(params.rootPath);
+    } else {
+      return null;
+    }
   }
 }

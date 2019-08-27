@@ -1,4 +1,3 @@
-import { SyntaxNode, Tree } from "tree-sitter";
 import {
   IConnection,
   Position,
@@ -7,6 +6,7 @@ import {
   TextEdit,
   WorkspaceEdit,
 } from "vscode-languageserver";
+import { Tree } from "web-tree-sitter";
 import { IForest } from "../forest";
 import { IImports } from "../imports";
 import { References } from "../util/references";
@@ -24,15 +24,16 @@ export class RenameProvider {
   protected handleRenameRequest = async (
     params: RenameParams,
   ): Promise<WorkspaceEdit | null | undefined> => {
+    this.connection.console.info(`Renaming was requested`);
     const tree: Tree | undefined = this.forest.getTree(params.textDocument.uri);
 
     if (tree) {
-      const nodeAtPosition = tree.rootNode.namedDescendantForPosition({
-        column: params.position.character,
-        row: params.position.line,
-      });
+      const nodeAtPosition = TreeUtils.getNamedDescendantForPosition(
+        tree.rootNode,
+        params.position,
+      );
 
-      const definitionNode = TreeUtils.findDefinitonNodeByReferencingNode(
+      const definitionNode = TreeUtils.findDefinitionNodeByReferencingNode(
         nodeAtPosition,
         params.textDocument.uri,
         tree,
@@ -41,7 +42,7 @@ export class RenameProvider {
 
       if (definitionNode) {
         const refTree = this.forest.getByUri(definitionNode.uri);
-        if (refTree && refTree.writeable) {
+        if (refTree && refTree.writable) {
           const references = References.find(
             definitionNode,
             this.forest,

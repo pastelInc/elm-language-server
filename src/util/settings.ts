@@ -1,39 +1,44 @@
-import { ClientCapabilities, IConnection } from "vscode-languageserver";
+import { IConnection } from "vscode-languageserver";
 
 export interface IClientSettings {
-  elmPath: string;
   elmFormatPath: string;
+  elmPath: string;
+  elmTestPath: string;
+  elmAnalyseTrigger: ElmAnalyseTrigger;
+  trace: { server: string };
 }
 
+export type ElmAnalyseTrigger = "change" | "save" | "never";
+
 export class Settings {
-  private fallbackSettings: IClientSettings;
-  private capabilities: ClientCapabilities;
-  constructor(
-    capabilities: ClientCapabilities,
-    fallbackSettings: IClientSettings,
-  ) {
-    this.capabilities = capabilities;
-    this.fallbackSettings = fallbackSettings;
+  private clientSettings: IClientSettings = {
+    elmAnalyseTrigger: "change",
+    elmFormatPath: "",
+    elmPath: "",
+    elmTestPath: "",
+    trace: { server: "off" },
+  };
+
+  private initDone = false;
+
+  constructor(private connection: IConnection, config: any) {
+    this.updateSettings(config);
   }
 
-  public getSettings(connection: IConnection): Thenable<IClientSettings> {
-    const supportsConfig =
-      this.capabilities &&
-      this.capabilities.workspace &&
-      this.capabilities.workspace.configuration;
+  public initFinished() {
+    this.initDone = true;
+  }
 
-    if (!supportsConfig) {
-      return Promise.resolve(this.fallbackSettings);
-    }
-
-    return connection.workspace
-      .getConfiguration({
-        section: "elmLS",
-      })
-      .then(settings =>
-        // Allow falling back to the preset params if we cant get the
-        // settings from the workspace
-        Object.assign({}, this.fallbackSettings, settings),
+  public async getClientSettings(): Promise<IClientSettings> {
+    if (this.initDone) {
+      this.updateSettings(
+        await this.connection.workspace.getConfiguration("elmLS"),
       );
+    }
+    return this.clientSettings;
+  }
+
+  private updateSettings(config: any): void {
+    this.clientSettings = { ...this.clientSettings, ...config };
   }
 }

@@ -1,12 +1,13 @@
-import { SyntaxNode, Tree } from "tree-sitter";
 import {
   CodeLens,
   CodeLensParams,
   Command,
   IConnection,
+  Location,
   Position,
   Range,
 } from "vscode-languageserver";
+import { SyntaxNode, Tree } from "web-tree-sitter";
 import { IForest } from "../forest";
 import { IImports } from "../imports";
 import { References } from "../util/references";
@@ -33,6 +34,9 @@ export class CodeLensProvider {
   protected handleCodeLensRequest = async (
     param: CodeLensParams,
   ): Promise<CodeLens[] | null | undefined> => {
+    this.connection.console.info(
+      `A code lens was requested for ${param.textDocument.uri}`,
+    );
     const codeLens: CodeLens[] = [];
 
     const tree: Tree | undefined = this.forest.getTree(param.textDocument.uri);
@@ -54,9 +58,10 @@ export class CodeLensProvider {
     const codelens = param;
     const data: {
       codeLensType: CodeLensType;
-      referenceNodeCount: number;
+      references: Location[];
       exposed: boolean;
     } = codelens.data;
+    this.connection.console.info(`A code lens resolve was requested`);
     if (data.codeLensType) {
       switch (data.codeLensType) {
         case "exposed":
@@ -67,9 +72,9 @@ export class CodeLensProvider {
           break;
         case "referenceCounter":
           codelens.command = Command.create(
-            data.referenceNodeCount === 1
+            data.references.length === 1
               ? "1 reference"
-              : `${data.referenceNodeCount} references`,
+              : `${data.references.length} references`,
             "",
           );
 
@@ -107,7 +112,7 @@ export class CodeLensProvider {
     uri: string,
     tree: Tree,
   ) {
-    const definitionNode = TreeUtils.findDefinitonNodeByReferencingNode(
+    const definitionNode = TreeUtils.findDefinitionNodeByReferencingNode(
       nameNode,
       uri,
       tree,
@@ -119,6 +124,22 @@ export class CodeLensProvider {
       this.forest,
       this.imports,
     );
+
+    let refLocations: Location[] = [];
+    if (references) {
+      refLocations = references.map(a =>
+        Location.create(
+          a.uri,
+          Range.create(
+            Position.create(
+              a.node.startPosition.row,
+              a.node.startPosition.column,
+            ),
+            Position.create(a.node.endPosition.row, a.node.endPosition.column),
+          ),
+        ),
+      );
+    }
 
     return CodeLens.create(
       Range.create(
@@ -133,7 +154,7 @@ export class CodeLensProvider {
       ),
       {
         codeLensType: "referenceCounter",
-        referenceNodeCount: references.length,
+        references: refLocations,
       },
     );
   }
@@ -202,29 +223,31 @@ export class CodeLensProvider {
       }
     });
 
-    tree.rootNode.descendantsOfType("value_declaration").forEach(node => {
-      const functionName = TreeUtils.getFunctionNameNodeFromDefinition(node);
+    TreeUtils.descendantsOfType(tree.rootNode, "value_declaration").forEach(
+      node => {
+        const functionName = TreeUtils.getFunctionNameNodeFromDefinition(node);
 
-      if (functionName) {
-        if (
-          node.previousNamedSibling &&
-          node.previousNamedSibling.type === "type_annotation"
-        ) {
-          codeLens.push(
-            this.createReferenceCodeLens(
-              node.previousNamedSibling,
-              functionName,
-              uri,
-              tree,
-            ),
-          );
-        } else {
-          codeLens.push(
-            this.createReferenceCodeLens(node, functionName, uri, tree),
-          );
+        if (functionName) {
+          if (
+            node.previousNamedSibling &&
+            node.previousNamedSibling.type === "type_annotation"
+          ) {
+            codeLens.push(
+              this.createReferenceCodeLens(
+                node.previousNamedSibling,
+                functionName,
+                uri,
+                tree,
+              ),
+            );
+          } else {
+            codeLens.push(
+              this.createReferenceCodeLens(node, functionName, uri, tree),
+            );
+          }
         }
-      }
-    });
+      },
+    );
 
     const moduleNameNode = TreeUtils.getModuleNameNode(tree);
     if (moduleNameNode && moduleNameNode.lastChild) {

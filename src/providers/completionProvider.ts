@@ -1,4 +1,3 @@
-import { Tree } from "tree-sitter";
 import {
   CompletionItem,
   CompletionItemKind,
@@ -6,8 +5,8 @@ import {
   IConnection,
   InsertTextFormat,
   MarkupKind,
-  SymbolKind,
 } from "vscode-languageserver";
+import { SyntaxNode, Tree } from "web-tree-sitter";
 import { IForest } from "../forest";
 import { IImports } from "../imports";
 import { getEmptyTypes } from "../util/elmUtils";
@@ -28,18 +27,25 @@ export class CompletionProvider {
   }
 
   private handleCompletionRequest = (
-    param: CompletionParams,
+    params: CompletionParams,
   ): CompletionItem[] | null | undefined => {
+    this.connection.console.info(`A completion was requested`);
     const completions: CompletionItem[] = [];
 
-    const tree: Tree | undefined = this.forest.getTree(param.textDocument.uri);
+    const tree: Tree | undefined = this.forest.getTree(params.textDocument.uri);
 
     if (tree) {
+      const nodeAtPosition = TreeUtils.getNamedDescendantForPosition(
+        tree.rootNode,
+        params.position,
+      );
+
       // Todo add variables from local let scopes
       completions.push(...this.getSameFileTopLevelCompletions(tree));
+      completions.push(...this.findDefinitionsForScope(nodeAtPosition, tree));
 
       completions.push(
-        ...this.getCompletionsFromOtherFile(param.textDocument.uri),
+        ...this.getCompletionsFromOtherFile(params.textDocument.uri),
       );
 
       completions.push(...this.createSnippets());
@@ -95,10 +101,12 @@ export class CompletionProvider {
 
   private getSameFileTopLevelCompletions(tree: Tree): CompletionItem[] {
     const completions: CompletionItem[] = [];
-    const functions = TreeUtils.findAllFunctionDeclarations(tree);
+    const topLevelFunctions = TreeUtils.findAllTopLeverFunctionDeclarations(
+      tree,
+    );
     // Add functions
-    if (functions) {
-      const declarations = functions.filter(
+    if (topLevelFunctions) {
+      const declarations = topLevelFunctions.filter(
         a =>
           a.firstNamedChild !== null &&
           a.firstNamedChild.type === "function_declaration_left" &&
@@ -127,8 +135,11 @@ export class CompletionProvider {
         if (name) {
           completions.push(this.createTypeCompletion(value, name.text));
         }
-        // Add types constuctors
-        const unionVariants = declaration.descendantsOfType("union_variant");
+        // Add types constructors
+        const unionVariants = TreeUtils.descendantsOfType(
+          declaration,
+          "union_variant",
+        );
         for (const unionVariant of unionVariants) {
           const unionVariantName = TreeUtils.findFirstNamedChildOfType(
             "upper_case_identifier",
@@ -166,7 +177,18 @@ export class CompletionProvider {
   ): CompletionItem {
     return this.createCompletion(
       markdownDocumentation,
-      SymbolKind.Function,
+      CompletionItemKind.Function,
+      label,
+    );
+  }
+
+  private createFunctionParameterCompletion(
+    markdownDocumentation: string | undefined,
+    label: string,
+  ): CompletionItem {
+    return this.createPreselectedCompletion(
+      markdownDocumentation,
+      CompletionItemKind.Field,
       label,
     );
   }
@@ -175,7 +197,11 @@ export class CompletionProvider {
     markdownDocumentation: string | undefined,
     label: string,
   ): CompletionItem {
-    return this.createCompletion(markdownDocumentation, SymbolKind.Enum, label);
+    return this.createCompletion(
+      markdownDocumentation,
+      CompletionItemKind.Enum,
+      label,
+    );
   }
 
   private createTypeAliasCompletion(
@@ -184,7 +210,7 @@ export class CompletionProvider {
   ): CompletionItem {
     return this.createCompletion(
       markdownDocumentation,
-      SymbolKind.Struct,
+      CompletionItemKind.Struct,
       label,
     );
   }
@@ -195,13 +221,17 @@ export class CompletionProvider {
   ): CompletionItem {
     return this.createCompletion(
       markdownDocumentation,
-      SymbolKind.Operator,
+      CompletionItemKind.Operator,
       label,
     );
   }
 
   private createUnionConstructorCompletion(label: string): CompletionItem {
-    return this.createCompletion(undefined, SymbolKind.EnumMember, label);
+    return this.createCompletion(
+      undefined,
+      CompletionItemKind.EnumMember,
+      label,
+    );
   }
 
   private createCompletion(
@@ -212,91 +242,161 @@ export class CompletionProvider {
     return {
       documentation: {
         kind: MarkupKind.Markdown,
-        value: markdownDocumentation ? markdownDocumentation : "",
+        value: markdownDocumentation || "",
       },
       kind,
       label,
     };
   }
-
-  private createSnippet(
-    label: string,
-    snippetText: string | string[],
+  private createPreselectedCompletion(
     markdownDocumentation: string | undefined,
+    kind: CompletionItemKind,
+    label: string,
   ): CompletionItem {
     return {
       documentation: {
         kind: MarkupKind.Markdown,
-        value: markdownDocumentation ? markdownDocumentation : "",
+        value: markdownDocumentation || "",
       },
-      insertText:
-        snippetText instanceof Array ? snippetText.join("\n") : snippetText,
+      kind,
+      label,
+      preselect: true,
+    };
+  }
+
+  private findDefinitionsForScope(
+    node: SyntaxNode,
+    tree: Tree,
+  ): CompletionItem[] {
+    const result: CompletionItem[] = [];
+    if (node.parent) {
+      if (node.parent.type === "let_in_expr") {
+        const inNode = TreeUtils.findFirstNamedChildOfType("in", node.parent);
+        if (inNode) {
+          let nodeToProcess = inNode.previousNamedSibling;
+          do {
+            if (nodeToProcess) {
+              if (
+                nodeToProcess.type === "value_declaration" &&
+                nodeToProcess.firstNamedChild !== null &&
+                nodeToProcess.firstNamedChild.type ===
+                  "function_declaration_left" &&
+                nodeToProcess.firstNamedChild.firstNamedChild !== null &&
+                nodeToProcess.firstNamedChild.firstNamedChild.type ===
+                  "lower_case_identifier"
+              ) {
+                const value = HintHelper.createHintFromDefinitionInLet(
+                  nodeToProcess,
+                );
+                result.push(
+                  this.createFunctionCompletion(
+                    value,
+                    nodeToProcess.firstNamedChild.firstNamedChild.text,
+                  ),
+                );
+              }
+              nodeToProcess = nodeToProcess.previousNamedSibling;
+            }
+          } while (nodeToProcess && nodeToProcess.type !== "let");
+        }
+      }
+      if (
+        node.parent.type === "case_of_branch" &&
+        node.parent.firstNamedChild &&
+        node.parent.firstNamedChild.type === "pattern" &&
+        node.parent.firstNamedChild.firstNamedChild &&
+        node.parent.firstNamedChild.firstNamedChild.type === "union_pattern" &&
+        node.parent.firstNamedChild.firstNamedChild.childCount > 1 // Ignore cases of case branches with no params
+      ) {
+        const caseBranchVariableNodes = TreeUtils.findAllNamedChildrenOfType(
+          "lower_pattern",
+          node.parent.firstNamedChild.firstNamedChild,
+        );
+        if (caseBranchVariableNodes) {
+          caseBranchVariableNodes.forEach(a => {
+            const value = HintHelper.createHintFromDefinitionInCaseBranch();
+            result.push(this.createFunctionCompletion(value, a.text));
+          });
+        }
+      }
+      if (
+        node.parent.type === "value_declaration" &&
+        node.parent.firstChild &&
+        node.parent.firstChild.type === "function_declaration_left"
+      ) {
+        node.parent.firstChild.children.forEach(child => {
+          if (child.type === "lower_pattern") {
+            const markdownDocumentation = HintHelper.createHintFromFunctionParameter(
+              child,
+            );
+            result.push(
+              this.createFunctionParameterCompletion(
+                markdownDocumentation,
+                child.text,
+              ),
+            );
+
+            const annotationTypeNode = TreeUtils.getTypeOrTypeAliasOfFunctionParameter(
+              child,
+            );
+            if (annotationTypeNode) {
+              const typeDeclarationNode = TreeUtils.findTypeAliasDeclaration(
+                tree,
+                annotationTypeNode.text,
+              );
+              if (typeDeclarationNode) {
+                const fields = TreeUtils.getAllFieldsFromTypeAlias(
+                  typeDeclarationNode,
+                );
+                if (fields) {
+                  fields.forEach(element => {
+                    const hint = HintHelper.createHintForTypeAliasReference(
+                      element.type,
+                      element.field,
+                      child.text,
+                    );
+                    result.push(
+                      this.createFunctionParameterCompletion(
+                        hint,
+                        `${child.text}.${element.field}`,
+                      ),
+                    );
+                  });
+                }
+              }
+            }
+          }
+        });
+      }
+      result.push(...this.findDefinitionsForScope(node.parent, tree));
+    }
+
+    return result;
+  }
+
+  private createSnippet(
+    label: string,
+    snippetText: string | string[],
+    markdownDocumentation?: string,
+  ): CompletionItem {
+    return {
+      documentation: {
+        kind: MarkupKind.Markdown,
+        value: markdownDocumentation || "",
+      },
+      insertText: Array.isArray(snippetText)
+        ? snippetText.join("\n")
+        : snippetText,
       insertTextFormat: InsertTextFormat.Snippet,
       kind: CompletionItemKind.Snippet,
       label,
     };
   }
 
+  // tslint:disable: no-duplicate-string
+  // tslint:disable: no-big-function
   private createSnippets() {
     return [
-      this.createSnippet("negate", "negate ${1:number}", "number -> number"),
-
-      this.createSnippet("turns", "turns ${1:float}", "Float -> Float"),
-      this.createSnippet("always", "always ${1:a} ${2:b}", "a -> b -> a"),
-      this.createSnippet(
-        "logBase",
-        "logBase ${1:float} ${2:float}",
-        "Float -> Float -> Float",
-      ),
-      this.createSnippet("truncate", "truncate ${1:float}", "Float -> Int"),
-      this.createSnippet(
-        "clamp",
-        "clamp ${1:number} ${2:number} ${3:number}",
-        "number -> number -> number -> number",
-      ),
-      this.createSnippet(
-        "compare",
-        "compare ${1:comparable} ${2:comparable}",
-        "comparable -> comparable -> Order",
-      ),
-      this.createSnippet(
-        "curry",
-        "curry ${1:function} ${2:a} ${3:b}",
-        "((a,b) -> c) -> a -> b -> c",
-      ),
-      this.createSnippet(
-        "flip",
-        "flip ${1:function} ${2:function}",
-        "(a -> b -> c) -> (b -> a -> c)",
-      ),
-      this.createSnippet(
-        "toPolar",
-        "toPolar ${1:tuple}",
-        "(Float,Float) -> (Float,Float)",
-      ),
-      this.createSnippet("first", "first ${1:tuple}", "(a,b) -> a"),
-      this.createSnippet("identity", "identity ${1:a}", "a -> a"),
-      this.createSnippet("isNaN", "isNaN ${1:float}", "Float -> Bool"),
-      this.createSnippet(
-        "min",
-        "min ${1:comparable} ${2:comparable}",
-        "comparable -> comparable -> comparable",
-      ),
-      this.createSnippet("not", "not ${1:bool}", "Bool -> Bool"),
-      this.createSnippet("rem", "rem ${1:int} ${2:int}", "Int -> Int -> Int"),
-      this.createSnippet("second", "second ${1:tuple}", "(a,b) -> b"),
-      this.createSnippet("toFloat", "toFloat ${1:int}", "Int -> Float"),
-      this.createSnippet("toString", "toString ${1:a}", "a -> String"),
-      this.createSnippet(
-        "uncurry",
-        "uncurry ${1:function} ${2:tuple}",
-        "(a -> b -> c) -> (a,b) -> c",
-      ),
-      this.createSnippet(
-        "xor",
-        "xor ${1:bool} ${2:bool}",
-        "Bool -> Bool -> Bool",
-      ),
       this.createSnippet(
         "module",
         "module ${1:Name} exposing (${2:..})",
@@ -308,7 +408,7 @@ export class CompletionProvider {
         "Unqualified import",
       ),
       this.createSnippet(
-        "caseof",
+        "case of",
         [
           "case ${1:expression} of",
           "    ${2:option1} ->",
@@ -316,6 +416,7 @@ export class CompletionProvider {
           "",
           "    ${4:option2} ->",
           "        ${5}",
+          "$0",
         ],
         "Case of expression with 2 alternatives",
       ),
@@ -331,17 +432,17 @@ export class CompletionProvider {
         "Record",
       ),
       this.createSnippet(
-        "recordtype",
+        "type alias",
         [
           "type alias ${1:recordName} =",
           "    { ${2:key1} : ${3:ValueType1}",
           "    , ${4:key2} : ${5:ValueType2}",
           "    }",
         ],
-        "Record type",
+        "Type alias",
       ),
       this.createSnippet(
-        "recordupdate",
+        "record update",
         ["{ ${1:recordName} | ${2:key} = ${3} }"],
         "Update record",
       ),
@@ -351,14 +452,14 @@ export class CompletionProvider {
         "Anonymous function",
       ),
       this.createSnippet(
-        "union",
+        "type",
         ["type ${1:Typename}", "    = ${2:Value1}", "    | ${3:Value2}"],
-        "Union type",
+        "Custom type",
       ),
       this.createSnippet(
         "msg",
         ["type Msg", "    = ${1:Message}", "    | ${2:Message}"],
-        "Default message union type",
+        "Default message custom type",
       ),
       this.createSnippet(
         "func",
@@ -370,7 +471,7 @@ export class CompletionProvider {
         "Function with type annotation",
       ),
       this.createSnippet(
-        "letin",
+        "let in",
         ["let", "    ${1}", "in", "${0}"],
         "Let expression",
       ),
@@ -394,17 +495,17 @@ export class CompletionProvider {
         "Default view function",
       ),
       this.createSnippet(
-        "portin",
+        "port in",
         ["port ${1:portName} : (${2:Typename} -> msg) -> Sub msg"],
         "Incoming port",
       ),
       this.createSnippet(
-        "portout",
+        "port out",
         ["port ${1:portName} : ${2:Typename} -> Cmd msg"],
         "Outgoing port",
       ),
       this.createSnippet(
-        "mainsandbox",
+        "main sandbox",
         [
           "main : Program () Model Msg",
           "main =",
@@ -417,7 +518,7 @@ export class CompletionProvider {
         "Main Browser Sandbox",
       ),
       this.createSnippet(
-        "mainelement",
+        "main element",
         [
           "main : Program () Model Msg",
           "main =",
@@ -431,7 +532,7 @@ export class CompletionProvider {
         "Main Browser Element",
       ),
       this.createSnippet(
-        "maindocument",
+        "main document",
         [
           "main : Program () Model Msg",
           "main =",
@@ -445,7 +546,7 @@ export class CompletionProvider {
         "Main Browser Document",
       ),
       this.createSnippet(
-        "mainapplication",
+        "main application",
         [
           "main : Program () Model Msg",
           "main =",
@@ -470,7 +571,7 @@ export class CompletionProvider {
         "Subscriptions",
       ),
       this.createSnippet(
-        "elmdmodel",
+        "default model",
         [
           "type alias Model =",
           "    { statusText : String",
@@ -748,12 +849,12 @@ export class CompletionProvider {
       this.createSnippet(
         "describe",
         ['describe "${1:name}"', "    [ ${0}", "    ]"],
-        "describe block in Elm-test",
+        "Describe block in Elm-test",
       ),
       this.createSnippet(
         "test",
         ['test "${1:name}" <|', "    \\_ ->", "        ${0}"],
-        "test block in Elm-test",
+        "Test block in Elm-test",
       ),
       this.createSnippet("todo", "-- TODO: ${0}", "TODO comment"),
     ];

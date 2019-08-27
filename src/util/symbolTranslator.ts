@@ -1,10 +1,10 @@
-import { SyntaxNode } from "tree-sitter";
 import {
   Position,
   Range,
   SymbolInformation,
   SymbolKind,
 } from "vscode-languageserver";
+import { SyntaxNode } from "web-tree-sitter";
 import { TreeUtils } from "./treeUtils";
 
 export class SymbolInformationTranslator {
@@ -74,43 +74,6 @@ export class SymbolInformationTranslator {
           SymbolKind.EnumMember,
           uri,
         );
-      case "number_constant_expr":
-        return this.createSymbolInformation(
-          node.text,
-          node,
-          SymbolKind.Number,
-          uri,
-        );
-      case "string_constant_expr":
-        return this.createSymbolInformation(
-          node.text,
-          node,
-          SymbolKind.String,
-          uri,
-        );
-      case "operator_identifier":
-        return this.createSymbolInformation(
-          node.text,
-          node,
-          SymbolKind.Operator,
-          uri,
-        );
-      case "list_expr":
-        return this.createSymbolInformation(
-          node.text,
-          node,
-          SymbolKind.Array,
-          uri,
-        );
-      case "upper_case_identifier":
-        if (node.text === "True" || node.text === "False") {
-          return this.createSymbolInformation(
-            node.text,
-            node,
-            SymbolKind.Boolean,
-            uri,
-          );
-        }
       default:
         break;
     }

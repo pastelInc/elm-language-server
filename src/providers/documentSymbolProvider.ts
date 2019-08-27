@@ -1,13 +1,10 @@
-import { SyntaxNode, Tree } from "tree-sitter";
 import {
   DocumentSymbol,
   DocumentSymbolParams,
   IConnection,
-  Position,
-  Range,
   SymbolInformation,
-  SymbolKind,
 } from "vscode-languageserver";
+import { SyntaxNode, Tree } from "web-tree-sitter";
 import { IForest } from "../forest";
 import { SymbolInformationTranslator } from "../util/symbolTranslator";
 
@@ -24,8 +21,10 @@ export class DocumentSymbolProvider {
 
   private handleDocumentSymbolRequest = async (
     param: DocumentSymbolParams,
+    // tslint:disable-next-line: max-union-size
   ): Promise<SymbolInformation[] | DocumentSymbol[] | null | undefined> => {
-    const symbolInformations: SymbolInformation[] = [];
+    this.connection.console.info(`Document Symbols were requested`);
+    const symbolInformationList: SymbolInformation[] = [];
 
     const tree: Tree | undefined = this.forest.getTree(param.textDocument.uri);
 
@@ -35,7 +34,7 @@ export class DocumentSymbolProvider {
         node,
       );
       if (symbolInformation) {
-        symbolInformations.push(symbolInformation);
+        symbolInformationList.push(symbolInformation);
       }
 
       for (const childNode of node.children) {
@@ -46,6 +45,6 @@ export class DocumentSymbolProvider {
       traverse(tree.rootNode);
     }
 
-    return symbolInformations;
+    return symbolInformationList;
   };
 }

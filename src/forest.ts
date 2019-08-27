@@ -1,9 +1,9 @@
-import { Tree } from "tree-sitter";
+import { Tree } from "web-tree-sitter";
 import { Exposing, TreeUtils } from "./util/treeUtils";
 
 export interface ITreeContainer {
   uri: string;
-  writeable: boolean;
+  writable: boolean;
   referenced: boolean;
   moduleName: string;
   exposing: Exposing;
@@ -19,7 +19,7 @@ export interface IForest {
   getByUri(uri: string): ITreeContainer | undefined;
   setTree(
     uri: string,
-    writeable: boolean,
+    writable: boolean,
     referenced: boolean,
     tree: Tree,
   ): void;
@@ -29,58 +29,34 @@ export interface IForest {
 export class Forest implements IForest {
   public treeIndex: ITreeContainer[] = [];
 
-  constructor() {
-    this.treeIndex = new Array();
-  }
-
   public getTree(uri: string): Tree | undefined {
     const result = this.treeIndex.find(tree => tree.uri === uri);
-    if (result) {
-      return result.tree;
-    } else {
-      return undefined;
-    }
+
+    return result && result.tree;
   }
 
   public getExposingByModuleName(moduleName: string): Exposing | undefined {
     const result = this.treeIndex.find(tree => tree.moduleName === moduleName);
-    if (result) {
-      return result.exposing;
-    } else {
-      return undefined;
-    }
+    return result && result.exposing;
   }
 
   public getTreeByModuleName(moduleName: string): Tree | undefined {
     const result = this.treeIndex.find(tree => tree.moduleName === moduleName);
-    if (result) {
-      return result.tree;
-    } else {
-      return undefined;
-    }
+
+    return result && result.tree;
   }
 
   public getByModuleName(moduleName: string): ITreeContainer | undefined {
-    const result = this.treeIndex.find(tree => tree.moduleName === moduleName);
-    if (result) {
-      return result;
-    } else {
-      return undefined;
-    }
+    return this.treeIndex.find(tree => tree.moduleName === moduleName);
   }
 
   public getByUri(uri: string): ITreeContainer | undefined {
-    const result = this.treeIndex.find(tree => tree.uri === uri);
-    if (result) {
-      return result;
-    } else {
-      return undefined;
-    }
+    return this.treeIndex.find(tree => tree.uri === uri);
   }
 
   public setTree(
     uri: string,
-    writeable: boolean,
+    writable: boolean,
     referenced: boolean,
     tree: Tree,
   ): void {
@@ -90,24 +66,19 @@ export class Forest implements IForest {
 
       const existingTree = this.treeIndex.findIndex(a => a.uri === uri);
 
+      const treeContainer = {
+        exposing,
+        moduleName,
+        referenced,
+        tree,
+        uri,
+        writable,
+      };
+
       if (existingTree === -1) {
-        this.treeIndex.push({
-          exposing,
-          moduleName,
-          referenced,
-          tree,
-          uri,
-          writeable,
-        });
+        this.treeIndex.push(treeContainer);
       } else {
-        this.treeIndex[existingTree] = {
-          exposing,
-          moduleName,
-          referenced,
-          tree,
-          uri,
-          writeable,
-        };
+        this.treeIndex[existingTree] = treeContainer;
       }
     }
   }

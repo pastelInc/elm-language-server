@@ -1,17 +1,17 @@
-import { SyntaxNode } from "tree-sitter";
 import {
   IConnection,
   SymbolInformation,
   WorkspaceSymbolParams,
 } from "vscode-languageserver";
+import { SyntaxNode } from "web-tree-sitter";
 import { IForest } from "../forest";
 import { SymbolInformationTranslator } from "../util/symbolTranslator";
 
 export class WorkspaceSymbolProvider {
-  private connection: IConnection;
-  private forest: IForest;
-
-  constructor(connection: IConnection, forest: IForest) {
+  constructor(
+    private readonly connection: IConnection,
+    private readonly forest: IForest,
+  ) {
     this.connection = connection;
     this.forest = forest;
 
@@ -21,16 +21,19 @@ export class WorkspaceSymbolProvider {
   private workspaceSymbolRequest = async (
     param: WorkspaceSymbolParams,
   ): Promise<SymbolInformation[] | null | undefined> => {
-    const symbolInformations: SymbolInformation[] = [];
+    this.connection.console.info(`Workspace Symbols were requested`);
+    const symbolInformationList: SymbolInformation[] = [];
 
     this.forest.treeIndex.forEach(tree => {
       const traverse: (node: SyntaxNode) => void = (node: SyntaxNode): void => {
-        const symbolInformation = SymbolInformationTranslator.translateNodeToSymbolInformation(
-          tree.uri,
-          node,
-        );
-        if (symbolInformation) {
-          symbolInformations.push(symbolInformation);
+        if (node.text.includes(param.query)) {
+          const symbolInformation = SymbolInformationTranslator.translateNodeToSymbolInformation(
+            tree.uri,
+            node,
+          );
+          if (symbolInformation) {
+            symbolInformationList.push(symbolInformation);
+          }
         }
 
         for (const childNode of node.children) {
@@ -43,6 +46,6 @@ export class WorkspaceSymbolProvider {
       }
     });
 
-    return symbolInformations;
+    return symbolInformationList;
   };
 }

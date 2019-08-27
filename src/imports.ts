@@ -1,6 +1,5 @@
-import Parser, { SyntaxNode, Tree } from "tree-sitter";
-import TreeSitterElm from "tree-sitter-elm";
-import { IForest } from "./forest";
+import Parser, { SyntaxNode, Tree } from "web-tree-sitter";
+import { IForest, ITreeContainer } from "./forest";
 import { Exposing, NodeType, TreeUtils } from "./util/treeUtils";
 
 export interface IImport {
@@ -18,16 +17,12 @@ export interface IImports {
 
 export class Imports implements IImports {
   public imports?: { [uri: string]: IImport[] } = {};
-  private parser: Parser;
 
-  constructor() {
-    this.parser = new Parser();
-    this.parser.setLanguage(TreeSitterElm);
-  }
+  constructor(private parser: Parser) {}
 
   public updateImports(uri: string, tree: Tree, forest: IForest): void {
     const result: IImport[] = [];
-    let importNodes = TreeUtils.findAllNamedChildsOfType(
+    let importNodes = TreeUtils.findAllNamedChildrenOfType(
       "import_clause",
       tree.rootNode,
     );
@@ -90,7 +85,8 @@ export class Imports implements IImports {
                       ),
                     );
                   } else {
-                    const exposedOperators = exposingList.descendantsOfType(
+                    const exposedOperators = TreeUtils.descendantsOfType(
+                      exposingList,
                       "operator_identifier",
                     );
                     if (exposedOperators.length > 0) {
@@ -102,19 +98,15 @@ export class Imports implements IImports {
                         },
                       );
                       result.push(
-                        ...exposedNodes.map(a => {
-                          return {
-                            alias: a.name,
-                            fromModuleName: moduleNameNode.text,
-                            fromUri: foundModule.uri,
-                            node: a.syntaxNode,
-                            type: a.type,
-                          };
-                        }),
+                        ...this.exposedNodesToImports(
+                          exposedNodes,
+                          moduleNameNode,
+                          foundModule,
+                        ),
                       );
                     }
 
-                    const exposedValues = TreeUtils.findAllNamedChildsOfType(
+                    const exposedValues = TreeUtils.findAllNamedChildrenOfType(
                       "exposed_value",
                       exposingList,
                     );
@@ -127,19 +119,15 @@ export class Imports implements IImports {
                         },
                       );
                       result.push(
-                        ...exposedNodes.map(a => {
-                          return {
-                            alias: a.name,
-                            fromModuleName: moduleNameNode.text,
-                            fromUri: foundModule.uri,
-                            node: a.syntaxNode,
-                            type: a.type,
-                          };
-                        }),
+                        ...this.exposedNodesToImports(
+                          exposedNodes,
+                          moduleNameNode,
+                          foundModule,
+                        ),
                       );
                     }
 
-                    const exposedType = TreeUtils.findAllNamedChildsOfType(
+                    const exposedType = TreeUtils.findAllNamedChildrenOfType(
                       "exposed_type",
                       exposingList,
                     );
@@ -160,15 +148,11 @@ export class Imports implements IImports {
                         },
                       );
                       result.push(
-                        ...exposedNodes.map(a => {
-                          return {
-                            alias: a.name,
-                            fromModuleName: moduleNameNode.text,
-                            fromUri: foundModule.uri,
-                            node: a.syntaxNode,
-                            type: a.type,
-                          };
-                        }),
+                        ...this.exposedNodesToImports(
+                          exposedNodes,
+                          moduleNameNode,
+                          foundModule,
+                        ),
                       );
                     }
                   }
@@ -200,9 +184,17 @@ export class Imports implements IImports {
       switch (element.type) {
         case "Function":
         case "TypeAlias":
+          result.push({
+            alias: `${importPrefix}.${element.name}`,
+            fromModuleName: moduleNameNode.text,
+            fromUri: uri,
+            node: element.syntaxNode,
+            type: element.type,
+          });
+          break;
         case "Type":
           result.push({
-            alias: importPrefix + "." + element.name,
+            alias: `${importPrefix}.${element.name}`,
             fromModuleName: moduleNameNode.text,
             fromUri: uri,
             node: element.syntaxNode,
@@ -212,13 +204,27 @@ export class Imports implements IImports {
             result.push(
               ...element.exposedUnionConstructors.map(a => {
                 return {
-                  alias: a.name,
+                  alias: `${importPrefix}.${a.name}`,
                   fromModuleName: moduleNameNode.text,
                   fromUri: uri,
                   node: a.syntaxNode,
                   type: "UnionConstructor" as NodeType,
                 };
               }),
+            );
+
+            result.push(
+              ...element.exposedUnionConstructors
+                .filter(a => a.accessibleWithoutPrefix)
+                .map(a => {
+                  return {
+                    alias: `${a.name}`,
+                    fromModuleName: moduleNameNode.text,
+                    fromUri: uri,
+                    node: a.syntaxNode,
+                    type: "UnionConstructor" as NodeType,
+                  };
+                }),
             );
           }
           break;
@@ -285,5 +291,29 @@ import Platform.Sub as Sub exposing ( Sub )
     });
 
     return result;
+  }
+
+  private exposedNodesToImports(
+    exposedNodes: Array<{
+      name: string;
+      syntaxNode: Parser.SyntaxNode;
+      type: NodeType;
+      exposedUnionConstructors?: Array<{
+        name: string;
+        syntaxNode: Parser.SyntaxNode;
+      }>;
+    }>,
+    moduleNameNode: SyntaxNode,
+    foundModule: ITreeContainer,
+  ): IImport[] {
+    return exposedNodes.map(a => {
+      return {
+        alias: a.name,
+        fromModuleName: moduleNameNode.text,
+        fromUri: foundModule.uri,
+        node: a.syntaxNode,
+        type: a.type,
+      };
+    });
   }
 }

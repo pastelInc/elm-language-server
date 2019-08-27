@@ -1,4 +1,3 @@
-import { SyntaxNode, Tree } from "tree-sitter";
 import {
   IConnection,
   Location,
@@ -7,9 +6,10 @@ import {
   Range,
   TextDocumentPositionParams,
 } from "vscode-languageserver";
+import { SyntaxNode, Tree } from "web-tree-sitter";
 import { IForest } from "../forest";
 import { IImports } from "../imports";
-import { NodeType, TreeUtils } from "../util/treeUtils";
+import { TreeUtils } from "../util/treeUtils";
 
 export class DefinitionProvider {
   constructor(
@@ -22,16 +22,18 @@ export class DefinitionProvider {
 
   protected handleDefinitionRequest = async (
     param: TextDocumentPositionParams,
+    // tslint:disable-next-line: max-union-size
   ): Promise<Location | Location[] | LocationLink[] | null | undefined> => {
+    this.connection.console.info(`A definition was requested`);
     const tree: Tree | undefined = this.forest.getTree(param.textDocument.uri);
 
     if (tree) {
-      const nodeAtPosition = tree.rootNode.namedDescendantForPosition({
-        column: param.position.character,
-        row: param.position.line,
-      });
+      const nodeAtPosition = TreeUtils.getNamedDescendantForPosition(
+        tree.rootNode,
+        param.position,
+      );
 
-      const definitionNode = TreeUtils.findDefinitonNodeByReferencingNode(
+      const definitionNode = TreeUtils.findDefinitionNodeByReferencingNode(
         nodeAtPosition,
         param.textDocument.uri,
         tree,

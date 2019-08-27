@@ -1,13 +1,6 @@
-import {
-  Diagnostic,
-  DiagnosticSeverity,
-  IConnection,
-  Range,
-  TextDocument,
-} from "vscode-languageserver";
-import URI from "vscode-uri";
-import { DocumentEvents } from "../../util/documentEvents";
-import { Settings } from "../../util/settings";
+import { Diagnostic, IConnection, TextDocument } from "vscode-languageserver";
+import { URI } from "vscode-uri";
+import { ElmAnalyseTrigger, Settings } from "../../util/settings";
 import { TextDocumentEvents } from "../../util/textDocumentEvents";
 import { ElmAnalyseDiagnostics } from "./elmAnalyseDiagnostics";
 import { ElmMakeDiagnostics } from "./elmMakeDiagnostics";
@@ -28,46 +21,52 @@ export interface IElmIssue {
 }
 
 export class DiagnosticsProvider {
-  private events: TextDocumentEvents;
   private elmMakeDiagnostics: ElmMakeDiagnostics;
-  private elmAnalyseDiagnostics: ElmAnalyseDiagnostics;
+  private elmAnalyseDiagnostics: ElmAnalyseDiagnostics | null;
   private currentDiagnostics: {
     elmMake: Map<string, Diagnostic[]>;
     elmAnalyse: Map<string, Diagnostic[]>;
+    elmTest: Map<string, Diagnostic[]>;
   };
-  private settings: Settings;
 
   constructor(
     private connection: IConnection,
     private elmWorkspaceFolder: URI,
-    documentEvents: DocumentEvents,
-    settings: Settings,
+    private settings: Settings,
+    private events: TextDocumentEvents,
+    elmAnalyse: ElmAnalyseDiagnostics | null,
+    elmMake: ElmMakeDiagnostics,
   ) {
-    this.getDiagnostics = this.getDiagnostics.bind(this);
     this.newElmAnalyseDiagnostics = this.newElmAnalyseDiagnostics.bind(this);
-    this.elmMakeIssueToDiagnostic = this.elmMakeIssueToDiagnostic.bind(this);
-    this.events = new TextDocumentEvents(documentEvents);
+    this.elmMakeDiagnostics = elmMake;
+    this.elmAnalyseDiagnostics = elmAnalyse;
 
-    this.connection = connection;
-    this.settings = settings;
-    this.elmWorkspaceFolder = elmWorkspaceFolder;
-    this.elmMakeDiagnostics = new ElmMakeDiagnostics(
-      connection,
-      elmWorkspaceFolder,
-      settings,
-    );
+    this.currentDiagnostics = {
+      elmAnalyse: new Map(),
+      elmMake: new Map(),
+      elmTest: new Map(),
+    };
 
-    this.elmAnalyseDiagnostics = new ElmAnalyseDiagnostics(
-      connection,
-      elmWorkspaceFolder,
-      this.newElmAnalyseDiagnostics,
-    );
-
-    this.currentDiagnostics = { elmMake: new Map(), elmAnalyse: new Map() };
-
-    this.events.on("open", this.getDiagnostics);
-    this.events.on("change", this.getDiagnostics);
-    this.events.on("save", this.getDiagnostics);
+    // register onChange listener if settings are not on-save only
+    this.settings.getClientSettings().then(({ elmAnalyseTrigger }) => {
+      this.events.on("open", d =>
+        this.getDiagnostics(d, true, elmAnalyseTrigger),
+      );
+      this.events.on("save", d =>
+        this.getDiagnostics(d, true, elmAnalyseTrigger),
+      );
+      if (this.elmAnalyseDiagnostics) {
+        this.elmAnalyseDiagnostics.on(
+          "new-diagnostics",
+          this.newElmAnalyseDiagnostics,
+        );
+      }
+      if (elmAnalyseTrigger === "change") {
+        this.events.on("change", d =>
+          this.getDiagnostics(d, false, elmAnalyseTrigger),
+        );
+      }
+    });
   }
 
   private newElmAnalyseDiagnostics(diagnostics: Map<string, Diagnostic[]>) {
@@ -77,15 +76,23 @@ export class DiagnosticsProvider {
 
   private sendDiagnostics() {
     const allDiagnostics: Map<string, Diagnostic[]> = new Map();
-    for (const [uri, diagnostics] of this.currentDiagnostics.elmAnalyse) {
+
+    for (const [uri, diagnostics] of this.currentDiagnostics.elmMake) {
       allDiagnostics.set(uri, diagnostics);
     }
 
-    for (const [uri, diagnostics] of this.currentDiagnostics.elmMake) {
-      allDiagnostics.set(
-        uri,
-        (allDiagnostics.get(uri) || []).concat(diagnostics),
-      );
+    for (const [uri, diagnostics] of this.currentDiagnostics.elmTest) {
+      const currentDiagnostics = allDiagnostics.get(uri) || [];
+      if (currentDiagnostics.length === 0) {
+        allDiagnostics.set(uri, diagnostics);
+      }
+    }
+
+    for (const [uri, diagnostics] of this.currentDiagnostics.elmAnalyse) {
+      const currentDiagnostics = allDiagnostics.get(uri) || [];
+      if (currentDiagnostics.length === 0) {
+        allDiagnostics.set(uri, diagnostics);
+      }
     }
 
     for (const [uri, diagnostics] of allDiagnostics) {
@@ -93,50 +100,41 @@ export class DiagnosticsProvider {
     }
   }
 
-  private async getDiagnostics(document: TextDocument): Promise<void> {
+  private async getDiagnostics(
+    document: TextDocument,
+    isSaveOrOpen: boolean,
+    elmAnalyseTrigger: ElmAnalyseTrigger,
+  ): Promise<void> {
+    this.connection.console.info(
+      `Diagnostics were requested due to a file ${
+        isSaveOrOpen ? "open or save" : "change"
+      }`,
+    );
+
     const uri = URI.parse(document.uri);
-    const text = document.getText();
+    if (uri.toString().startsWith(this.elmWorkspaceFolder.toString())) {
+      const text = document.getText();
 
-    this.elmAnalyseDiagnostics.updateFile(uri, text);
+      if (isSaveOrOpen) {
+        this.currentDiagnostics.elmMake = await this.elmMakeDiagnostics.createDiagnostics(
+          uri,
+        );
+      }
 
-    this.currentDiagnostics.elmMake = await this.elmMakeDiagnostics.createDiagnostics(uri);
-    this.sendDiagnostics();
-  }
+      const elmMakeDiagnosticsForCurrentFile = this.currentDiagnostics.elmMake.get(
+        uri.toString(),
+      );
 
-  private elmMakeIssueToDiagnostic(issue: IElmIssue): Diagnostic {
-    const lineRange: Range = Range.create(
-      issue.region.start.line === 0
-        ? issue.region.start.line
-        : issue.region.start.line - 1,
-      issue.region.start.column === 0
-        ? issue.region.start.column
-        : issue.region.start.column - 1,
-      issue.region.end.line === 0
-        ? issue.region.end.line
-        : issue.region.end.line - 1,
-      issue.region.end.column === 0
-        ? issue.region.end.column
-        : issue.region.end.column - 1,
-    );
-    return Diagnostic.create(
-      lineRange,
-      issue.overview + " - " + issue.details.replace(/\[\d+m/g, ""),
-      this.severityStringToDiagnosticSeverity(issue.type),
-      undefined,
-      "Elm",
-    );
-  }
+      if (
+        this.elmAnalyseDiagnostics &&
+        elmAnalyseTrigger !== "never" &&
+        elmMakeDiagnosticsForCurrentFile &&
+        elmMakeDiagnosticsForCurrentFile.length === 0
+      ) {
+        this.elmAnalyseDiagnostics.updateFile(uri, text);
+      }
 
-  private severityStringToDiagnosticSeverity(
-    severity: string,
-  ): DiagnosticSeverity {
-    switch (severity) {
-      case "error":
-        return DiagnosticSeverity.Error;
-      case "warning":
-        return DiagnosticSeverity.Warning;
-      default:
-        return DiagnosticSeverity.Error;
+      this.sendDiagnostics();
     }
   }
 }

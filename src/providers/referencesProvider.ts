@@ -1,4 +1,3 @@
-import { SyntaxNode, Tree } from "tree-sitter";
 import {
   IConnection,
   Location,
@@ -6,6 +5,7 @@ import {
   Range,
   ReferenceParams,
 } from "vscode-languageserver";
+import { SyntaxNode, Tree } from "web-tree-sitter";
 import { IForest } from "../forest";
 import { IImports } from "../imports";
 import { References } from "../util/references";
@@ -23,15 +23,16 @@ export class ReferencesProvider {
   protected handleReferencesRequest = async (
     params: ReferenceParams,
   ): Promise<Location[] | null | undefined> => {
+    this.connection.console.info(`References were requested`);
     const tree: Tree | undefined = this.forest.getTree(params.textDocument.uri);
 
     if (tree) {
-      const nodeAtPosition = tree.rootNode.namedDescendantForPosition({
-        column: params.position.character,
-        row: params.position.line,
-      });
+      const nodeAtPosition = TreeUtils.getNamedDescendantForPosition(
+        tree.rootNode,
+        params.position,
+      );
 
-      const definitionNode = TreeUtils.findDefinitonNodeByReferencingNode(
+      const definitionNode = TreeUtils.findDefinitionNodeByReferencingNode(
         nodeAtPosition,
         params.textDocument.uri,
         tree,
