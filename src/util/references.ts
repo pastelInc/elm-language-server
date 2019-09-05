@@ -19,7 +19,7 @@ export class References {
         const moduleNameNode = TreeUtils.getModuleNameNode(refSourceTree.tree);
         switch (definitionNode.nodeType) {
           case "Function":
-            const annotationNameNode = TreeUtils.getFunctionAnnotationNameNodeFromDefinition(
+            const annotationNameNode = this.getFunctionAnnotationNameNodeFromDefinition(
               definitionNode.node,
             );
             if (annotationNameNode && refSourceTree.writable) {
@@ -40,10 +40,19 @@ export class References {
                 });
               }
 
-              const localFunctions = TreeUtils.findFunctionCalls(
-                refSourceTree.tree.rootNode,
-                functionNameNode.text,
-              );
+              const localFunctions =
+                definitionNode.node.parent &&
+                definitionNode.node.parent.type === "let" &&
+                definitionNode.node.parent.nextNamedSibling
+                  ? this.findFunctionCalls(
+                      definitionNode.node.parent.nextNamedSibling,
+                      functionNameNode.text,
+                    )
+                  : this.findFunctionCalls(
+                      refSourceTree.tree.rootNode,
+                      functionNameNode.text,
+                    );
+
               if (localFunctions && refSourceTree.writable) {
                 references.push(
                   ...localFunctions.map(node => {
@@ -110,7 +119,7 @@ export class References {
                           }
 
                           needsToBeChecked.forEach(a => {
-                            const functions = TreeUtils.findFunctionCalls(
+                            const functions = this.findFunctionCalls(
                               treeToCheck.tree.rootNode,
                               a.alias,
                             );
@@ -291,7 +300,7 @@ export class References {
                 const functionBody =
                   definitionNode.node.parent.nextNamedSibling.nextNamedSibling;
                 if (functionBody) {
-                  const parameters = TreeUtils.findParameterUsage(
+                  const parameters = this.findParameterUsage(
                     functionBody,
                     definitionNode.node.text,
                   );
@@ -367,5 +376,56 @@ export class References {
       }
     }
     return references;
+  }
+
+  private static findFunctionCalls(
+    node: SyntaxNode,
+    functionName: string,
+  ): SyntaxNode[] | undefined {
+    const functions = this.findAllFunctionCallsAndParameters(node);
+    const result = functions.filter(a => a.text === functionName);
+    return result.length === 0 ? undefined : result;
+  }
+
+  private static findAllFunctionCallsAndParameters(
+    node: SyntaxNode,
+  ): SyntaxNode[] {
+    let functions = TreeUtils.descendantsOfType(node, "value_expr");
+    if (functions.length > 0) {
+      functions = functions.filter(
+        a => a.firstChild && a.firstChild.type === "value_qid",
+      );
+    }
+
+    return functions;
+  }
+
+  private static findParameterUsage(
+    node: SyntaxNode,
+    functionName: string,
+  ): SyntaxNode[] | undefined {
+    const parameters: SyntaxNode[] = [
+      ...this.findAllFunctionCallsAndParameters(node),
+      ...this.findAllRecordBaseIdentifiers(node),
+    ];
+    const result = parameters.filter(a => a.text === functionName);
+    return result.length === 0 ? undefined : result;
+  }
+
+  private static findAllRecordBaseIdentifiers(node: SyntaxNode): SyntaxNode[] {
+    return TreeUtils.descendantsOfType(node, "record_base_identifier");
+  }
+
+  private static getFunctionAnnotationNameNodeFromDefinition(
+    node: SyntaxNode,
+  ): SyntaxNode | undefined {
+    if (
+      node.previousNamedSibling &&
+      node.previousNamedSibling.type === "type_annotation" &&
+      node.previousNamedSibling.firstChild &&
+      node.previousNamedSibling.firstChild.type === "lower_case_identifier"
+    ) {
+      return node.previousNamedSibling.firstChild;
+    }
   }
 }

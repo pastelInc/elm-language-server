@@ -1,10 +1,11 @@
-import { readdirSync, readFileSync } from "fs";
-import globby = require("globby");
+import fs from "fs";
+import globby from "globby";
 import os from "os";
+import path from "path";
+import util from "util";
 import { IConnection } from "vscode-languageserver";
 import { URI } from "vscode-uri";
-import { Tree } from "web-tree-sitter";
-import Parser from "web-tree-sitter";
+import Parser, { Tree } from "web-tree-sitter";
 import { Forest } from "./forest";
 import { IImports, Imports } from "./imports";
 import { ASTProvider } from "./providers/astProvider";
@@ -26,6 +27,9 @@ import { DocumentEvents } from "./util/documentEvents";
 import * as utils from "./util/elmUtils";
 import { Settings } from "./util/settings";
 import { TextDocumentEvents } from "./util/textDocumentEvents";
+
+const readFile = util.promisify(fs.readFile);
+const readdir = util.promisify(fs.readdir);
 
 interface IFolder {
   path: string;
@@ -133,20 +137,20 @@ export class ElmWorkspace {
       );
     }
     try {
-      const path = `${this.elmWorkspace.fsPath}${this.elmJsonOrElmPackageJson(elmVersion)}`;
-      this.connection.console.info(`Reading ${this.elmJsonOrElmPackageJson(elmVersion)} from ${path}`);
+      const pathToElmJson = path.join(this.elmWorkspace.fsPath, this.elmJsonOrElmPackageJson(elmVersion));
+      this.connection.console.info(`Reading ${this.elmJsonOrElmPackageJson(elmVersion)} from ${pathToElmJson}`);
       // Find elm files and feed them to tree sitter
-      const elmJson = require(path);
+      const elmJson = require(pathToElmJson);
       const type = elmJson.type;
       const elmFolders: Map<string, boolean> = new Map();
       if (type === "application") {
         elmJson["source-directories"].forEach(async (folder: string) => {
-          elmFolders.set(this.elmWorkspace.fsPath + folder, true);
+          elmFolders.set(path.join(this.elmWorkspace.fsPath, folder), true);
         });
       } else {
-        elmFolders.set(`${this.elmWorkspace.fsPath}src`, true);
+        elmFolders.set(path.join(this.elmWorkspace.fsPath, "src"), true);
       }
-      elmFolders.set(`${this.elmWorkspace.fsPath}tests`, true);
+      elmFolders.set(path.join(this.elmWorkspace.fsPath, "tests"), true);
       this.connection.console.info(
         `${elmFolders.size} source-dirs and test folders found`,
       );
@@ -179,14 +183,14 @@ export class ElmWorkspace {
             const packageName = key.substring(key.indexOf("/") + 1, key.length);
 
             const pathToPackage = `${packagesRoot}${maintainer}/${packageName}/`;
-            const allVersionFolders = readdirSync(pathToPackage, "utf8").map(
-              folderName => {
-                return {
-                  version: folderName,
-                  versionPath: `${pathToPackage}${folderName}`,
-                };
-              },
-            );
+            const readDir = await readdir(pathToPackage, "utf8");
+
+            const allVersionFolders = readDir.map(folderName => {
+              return {
+                version: folderName,
+                versionPath: `${pathToPackage}${folderName}`,
+              };
+            });
             // TODO Actually honor the version constraints here
             const matchedFolder = utils.findDepVersion(
               allVersionFolders,
@@ -206,21 +210,11 @@ export class ElmWorkspace {
         `Found ${elmFilePaths.length.toString()} files to add to the project`,
       );
 
+      const promiseList = [];
       for (const filePath of elmFilePaths) {
-        this.connection.console.info(`Adding ${filePath.path.toString()}`);
-        const fileContent: string = readFileSync(
-          filePath.path.toString(),
-          "utf8",
-        );
-        let tree: Tree | undefined;
-        tree = this.parser.parse(fileContent);
-        this.forest.setTree(
-          URI.file(filePath.path).toString(),
-          filePath.writable,
-          true,
-          tree,
-        );
+        promiseList.push(this.readAndAddToForest(filePath));
       }
+      await Promise.all(promiseList);
 
       this.forest.treeIndex.forEach(item => {
         this.connection.console.info(`Adding imports ${item.uri.toString()}`);
@@ -242,9 +236,12 @@ export class ElmWorkspace {
   }
 
   private findElmFilesInFolder(element: [string, boolean]): IFolder[] {
+    // Cleanup the path on windows, as globby does not like backslashes
+    const globUri = element[0].replace(/\\/g, "/");
+
     return globby
-      .sync(`${element[0]}/**/*.elm`)
-      .map(path => ({ path, writable: element[1] }));
+      .sync(`${globUri}/**/*.elm`)
+      .map(matchingPath => ({ path: matchingPath, writable: element[1] }));
   }
 
   private elmJsonOrElmPackageJson(elmVersion : string | undefined) {
@@ -271,5 +268,28 @@ export class ElmWorkspace {
     return utils.isWindows
       ? `${os.homedir()}/AppData/Roaming/elm`
       : `${os.homedir()}/.elm`;
+  }
+
+  private async readAndAddToForest(filePath: IFolder): Promise<void> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        this.connection.console.info(`Adding ${filePath.path.toString()}`);
+        const fileContent: string = await readFile(filePath.path.toString(), {
+          encoding: "utf-8",
+        });
+
+        const tree: Tree | undefined = this.parser.parse(fileContent);
+        this.forest.setTree(
+          URI.file(filePath.path).toString(),
+          filePath.writable,
+          true,
+          tree,
+        );
+        resolve();
+      } catch (error) {
+        this.connection.console.error(error.stack);
+        reject(error);
+      }
+    });
   }
 }

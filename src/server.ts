@@ -1,4 +1,5 @@
 import globby from "globby";
+import path from "path";
 import {
   Connection,
   InitializeParams,
@@ -83,7 +84,7 @@ export class Server implements ILanguageServer {
   }
 
   public async init() {
-    this.elmWorkspaceMap.forEach(it => it.init());
+    this.elmWorkspaceMap.forEach(async it => await it.init());
   }
 
   public async registerInitializedProviders() {
@@ -94,7 +95,7 @@ export class Server implements ILanguageServer {
   }
 
   private getElmJsonFolder(uri: string): URI {
-    return URI.file(uri.replace("elm.json", "").replace("elm-package.json", ""));
+    return URI.file(path.dirname(uri));
   }
 
   private findTopLevelFolders(listOfElmJsonFolders: URI[]) {

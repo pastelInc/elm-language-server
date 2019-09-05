@@ -17,7 +17,7 @@ npm install -g @elm-tooling/elm-language-server
 Then, you should be able to run the language server with the following command:
 
 ```sh
-elm-language-server --stdio
+elm-language-server
 ```
 
 Follow the instructions below to integrate the language server into your editor.
@@ -91,7 +91,7 @@ Just install the [`elm-tooling/elm-language-client-vscode`](https://github.com/e
 
 ### Vim
 
-[General Elm Vim tooling](https://github.com/elm-tooling/elm-vim)
+There are [general setup instructions for vim](https://github.com/elm-tooling/elm-vim). It's recommended to install [syntax highlighting](https://github.com/andys8/vim-elm-syntax), which also adds the required [detection of elm as `filetype`](https://github.com/andys8/vim-elm-syntax/blob/d614325a037982489574012e4db04d7f8f134c17/ftdetect/elm.vim#L3).
 
 #### coc.nvim
 
@@ -104,7 +104,6 @@ If needed, you can set the paths to `elm`, `elm-test` and `elm-format` with the 
   "languageserver": {
     "elmLS": {
       "command": "elm-language-server",
-      "args": ["--stdio"],
       "filetypes": ["elm"],
       "rootPatterns": ["elm.json"],
       "initializationOptions": {
@@ -135,13 +134,13 @@ Much of this is covered in the [Example vim configuration](https://github.com/ne
 
 #### ALE
 
-[ALE](https://github.com/w0rp/ale) contains the `elm_ls` linter.
+[ALE](https://github.com/dense-analysis/ale) contains the `elm_ls` linter.
 
 ```
 let g:ale_linters = { 'elm': ['elm_ls'] }
 ```
 
-If needed, you can set the paths to `elm`, `elm-test` and `elm-format`. The configuration can be [found here](https://github.com/w0rp/ale/blob/master/doc/ale-elm.txt)
+If needed, you can set the paths to `elm`, `elm-test` and `elm-format`. The configuration can be [found here](https://github.com/dense-analysis/ale/blob/master/doc/ale-elm.txt)
 
 ```
 let g:ale_elm_ls_use_global = 1
@@ -183,7 +182,6 @@ Then, assuming installation of `elm-language-server`, `elm-format`, and `elm-tes
 filetypes = ["elm"]
 roots = ["elm.json"]
 command = "elm-language-server"
-args = ["--stdio"]
 
 [language.elm.initialization_options]
 elmAnalyseTrigger = "change"
@@ -204,8 +202,7 @@ Add this to your LSP settings under the `clients` node:
 ```json
 "elm": {
     "command": [
-        "elm-language-server",
-        "--stdio"
+        "elm-language-server"
     ],
     "enabled": true,
     "languageId": "elm",
