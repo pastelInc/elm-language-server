@@ -76,14 +76,15 @@ Settings may need a restart to be applied.
 
 ## Editor Support
 
-| Editor                                                                |    Diagnostics     |     Formatting     |    Code Lenses     |    Completions     |    Definitions     |  Document Symbols  |      Folding       |       Hover        |     References     |       Rename       | Workspace Symbols  |
-| --------------------------------------------------------------------- | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: |
-| [VSCode](https://github.com/elm-tooling/elm-language-server#vscode)   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
-| [VIM CoC](https://github.com/elm-tooling/elm-language-server#cocnvim) | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
-| [VIM ALE](https://github.com/elm-tooling/elm-language-server#ale)     | :heavy_check_mark: |        :x:         |        :x:         | :heavy_check_mark: | :heavy_check_mark: |        :x:         |        :x:         | :heavy_check_mark: | :heavy_check_mark: |        :x:         | :heavy_check_mark: |
-| [Kakoune](https://github.com/elm-tooling/elm-language-server#kak-lsp) | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   |
-| [Emacs](https://github.com/elm-tooling/elm-language-server#emacs)     | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
-| [Sublime](https://github.com/elm-tooling/elm-language-server#sublime) | :heavy_check_mark: | :heavy_check_mark: |        :x:         | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
+| Editor                                                                                  |    Diagnostics     |     Formatting     |    Code Lenses     |    Completions     |    Definitions     |  Document Symbols  |      Folding       |       Hover        |     References     |       Rename       | Workspace Symbols  |
+| --------------------------------------------------------------------------------------- | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: | :----------------: |
+| [VSCode](https://github.com/elm-tooling/elm-language-server#vscode)                     | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
+| [VIM CoC](https://github.com/elm-tooling/elm-language-server#cocnvim)                   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
+| [VIM LanguageClient](https://github.com/elm-tooling/elm-language-server#languageClient) | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: |  :grey_question:   |  :grey_question:   |  :grey_question:   |  :grey_question:   |  :grey_question:   |  :grey_question:   |  :grey_question:   |
+| [VIM ALE](https://github.com/elm-tooling/elm-language-server#ale)                       | :heavy_check_mark: |        :x:         |        :x:         | :heavy_check_mark: | :heavy_check_mark: |        :x:         |        :x:         | :heavy_check_mark: | :heavy_check_mark: |        :x:         | :heavy_check_mark: |
+| [Kakoune](https://github.com/elm-tooling/elm-language-server#kak-lsp)                   | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   |
+| [Emacs](https://github.com/elm-tooling/elm-language-server#emacs)                       | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
+| [Sublime](https://github.com/elm-tooling/elm-language-server#sublime)                   | :heavy_check_mark: | :heavy_check_mark: |        :x:         | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
 
 ### VSCode
 
@@ -91,7 +92,7 @@ Just install the [`elm-tooling/elm-language-client-vscode`](https://github.com/e
 
 ### Vim
 
-There are [general setup instructions for vim](https://github.com/elm-tooling/elm-vim). It's recommended to install [syntax highlighting](https://github.com/andys8/vim-elm-syntax), which also adds the required [detection of elm as `filetype`](https://github.com/andys8/vim-elm-syntax/blob/d614325a037982489574012e4db04d7f8f134c17/ftdetect/elm.vim#L3).
+There are [general setup instructions for vim](https://github.com/elm-tooling/elm-vim). It's recommended to install [syntax highlighting](https://github.com/andys8/vim-elm-syntax), which also adds the required [detection of elm as `filetype`](https://github.com/andys8/vim-elm-syntax/blob/d614325a037982489574012e4db04d7f8f134c17/ftdetect/elm.vim#L3). A example vim configuration can be found in [elm-vim/vim-config-example](https://github.com/elm-tooling/elm-vim/tree/master/vim-config-example).
 
 #### coc.nvim
 
@@ -144,10 +145,11 @@ If needed, you can set the paths to `elm`, `elm-test` and `elm-format`. The conf
 
 ```
 let g:ale_elm_ls_use_global = 1
+let g:ale_elm_ls_executable = "/path/to/elm-language-server"
+let g:ale_elm_ls_elm_analyse_trigger = 'change'
 let g:ale_elm_ls_elm_path = "/path/to/elm"
 let g:ale_elm_ls_elm_format_path = "/path/to/elm-format"
 let g:ale_elm_ls_elm_test_path = "/path/to/elm-test"
-let g:ale_elm_ls_executable = "/path/to/elm-language-server"
 ```
 
 | Feature           | How to use it                                                                                                                                                            |
@@ -163,6 +165,21 @@ let g:ale_elm_ls_executable = "/path/to/elm-language-server"
 | References        | `:ALEFindReferences`                                                                                                                                                     |
 | Rename            | Not currently supported                                                                                                                                                  |
 | Workspace Symbols | `:ALESymbolSearch <query>`                                                                                                                                               |
+
+#### LanguageClient
+
+To use this language server with [LanguageClient](https://github.com/autozimu/LanguageClient-neovim)
+add the following configuration to you neovim/vim.
+
+```viml
+let g:LanguageClient_serverCommands = {
+  \ 'elm': ['elm-language-server', '--stdio'],
+  \ }
+
+let g:LanguageClient_rootMarkers = {
+  \ 'elm': ['elm.json'],
+  \ }
+```
 
 ### Kakoune
 
