@@ -34,6 +34,14 @@ npm run compile
 npm link
 ```
 
+### Alternative: Install with [Nix](https://nixos.org)
+
+`elm-languager-server` and its [dependencies](https://github.com/elm-tooling/elm-language-server#requirements) are available in [`nixpkgs`](https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/compilers/elm/default.nix).
+
+```sh
+nix-env -i -A nixpkgs.elmPackages.elm-language-server
+```
+
 ## Requirements
 
 You will need to install `elm` and `elm-test` to get all diagnostics and `elm-format` for formatting. Alternatively you can also just install these to your local npm `package.json`.
@@ -74,6 +82,11 @@ This server contributes the following settings:
 
 Settings may need a restart to be applied.
 
+### Elm-Analyse Configuration
+
+`elm-analyse` is used for static code analysis. All checks are enabled by default. An (optional) `elm-analyse.json` configuration file will be respected, if added to your project.
+See its documentation for details regarding [`configuration`](https://stil4m.github.io/elm-analyse/#/configuration) and [`checks`](https://stil4m.github.io/elm-analyse/#/messages).
+
 ## Editor Support
 
 | Editor                                                                                  |    Diagnostics     |     Formatting     |    Code Lenses     |    Completions     |    Definitions     |  Document Symbols  |      Folding       |       Hover        |     References     |       Rename       | Workspace Symbols  |
@@ -81,7 +94,7 @@ Settings may need a restart to be applied.
 | [VSCode](https://github.com/elm-tooling/elm-language-server#vscode)                     | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
 | [VIM CoC](https://github.com/elm-tooling/elm-language-server#cocnvim)                   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
 | [VIM LanguageClient](https://github.com/elm-tooling/elm-language-server#languageClient) | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: |  :grey_question:   |  :grey_question:   |  :grey_question:   |  :grey_question:   |  :grey_question:   |  :grey_question:   |  :grey_question:   |
-| [VIM ALE](https://github.com/elm-tooling/elm-language-server#ale)                       | :heavy_check_mark: |        :x:         |        :x:         | :heavy_check_mark: | :heavy_check_mark: |        :x:         |        :x:         | :heavy_check_mark: | :heavy_check_mark: |        :x:         | :heavy_check_mark: |
+| [VIM ALE](https://github.com/elm-tooling/elm-language-server#ale)                       | :heavy_check_mark: |        :x:         |        :x:         |  :grey_question:   | :heavy_check_mark: |        :x:         |        :x:         | :heavy_check_mark: | :heavy_check_mark: |        :x:         | :heavy_check_mark: |
 | [Kakoune](https://github.com/elm-tooling/elm-language-server#kak-lsp)                   | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   |
 | [Emacs](https://github.com/elm-tooling/elm-language-server#emacs)                       | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |  :grey_question:   | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
 | [Sublime](https://github.com/elm-tooling/elm-language-server#sublime)                   | :heavy_check_mark: | :heavy_check_mark: |        :x:         | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
@@ -173,7 +186,7 @@ add the following configuration to you neovim/vim.
 
 ```viml
 let g:LanguageClient_serverCommands = {
-  \ 'elm': ['elm-language-server', '--stdio'],
+  \ 'elm': ['elm-language-server'],
   \ }
 
 let g:LanguageClient_rootMarkers = {

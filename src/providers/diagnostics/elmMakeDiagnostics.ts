@@ -214,9 +214,16 @@ export class ElmMakeDiagnostics {
           const execaError = error as execa.ExecaReturnValue<string>;
           const lines: IElmIssue[] = [];
           execaError.stderr.split("\n").forEach((line: string) => {
-            const errorObject = JSON.parse(line);
+            let errorObject: any;
+            try {
+              errorObject = JSON.parse(line);
+            } catch (error) {
+              this.connection.console.warn(
+                "Received an invalid json, skipping error.",
+              );
+            }
 
-            if (errorObject.type === "compile-errors") {
+            if (errorObject && errorObject.type === "compile-errors") {
               errorObject.errors.forEach((error: IError) => {
                 const problems: IElmIssue[] = error.problems.map(
                   (problem: IProblem) => ({
@@ -242,14 +249,17 @@ export class ElmMakeDiagnostics {
 
                 lines.push(...problems);
               });
-            } else if (errorObject.type === "error") {
+            } else if (errorObject && errorObject.type === "error") {
               const problem: IElmIssue = {
                 details: errorObject.message
                   .map((message: string | IStyledString) =>
                     typeof message === "string" ? message : message.string,
                   )
                   .join(""),
-                file: errorObject.path ? errorObject.path : relativePathToFile,
+                // elm-test might supply absolute paths to files
+                file: errorObject.path
+                  ? path.relative(cwd, errorObject.path)
+                  : relativePathToFile,
                 overview: errorObject.title,
                 region: {
                   end: {

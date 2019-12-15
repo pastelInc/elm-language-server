@@ -1,5 +1,28 @@
 # Change Log
 
+## 1.4.5
+
+- Improved completions for type annotations, functions, import and module statements
+- Fixed a bug where files without imports would not index the virtual imports
+
+## 1.4.4
+
+- Add more feedback on init for common errors
+- Make sure a file without permissions doesn't crash the server
+- `-v` to print version was not working
+
+## 1.4.3
+
+- Remove completions committing when space is pressed
+
+## 1.4.2
+
+- Completions should be much nicer to use now
+- Improved performance for codeLenses
+- Do not crash when the elm compiler generates invalid json
+- Fix codeLens bug showing wrong count for types
+- Print version with `-v` or `--version`
+
 ## 1.4.1
 
 - Fallback to old configuration flow when clients don't support the new one

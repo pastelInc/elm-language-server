@@ -986,7 +986,9 @@ export class TreeUtils {
         node.parent,
       );
       if (functionParameterNodes) {
-        const matchIndex = functionParameterNodes.findIndex(a => a === node);
+        const matchIndex = functionParameterNodes.findIndex(
+          a => a.text === node.text,
+        );
 
         const typeAnnotationNodes = TreeUtils.findAllNamedChildrenOfType(
           ["type_ref", "type_expression"],
@@ -1058,6 +1060,30 @@ export class TreeUtils {
         },
       );
     }
+  }
+
+  public static getNamedDescendantForLineBeforePosition(
+    node: SyntaxNode,
+    position: Position,
+  ): SyntaxNode {
+    const previousLine = position.line === 0 ? 0 : position.line - 1;
+
+    return node.namedDescendantForPosition({
+      column: 0,
+      row: previousLine,
+    });
+  }
+
+  public static getNamedDescendantForLineAfterPosition(
+    node: SyntaxNode,
+    position: Position,
+  ): SyntaxNode {
+    const followingLine = position.line + 1;
+
+    return node.namedDescendantForPosition({
+      column: 0,
+      row: followingLine,
+    });
   }
 
   // tslint:disable-next-line: no-identical-functions

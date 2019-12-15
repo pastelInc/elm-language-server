@@ -198,7 +198,9 @@ export class ElmWorkspace {
             );
             const pathToPackageWithVersion = matchedFolder
               ? `${matchedFolder.versionPath}/src`
-              : `${allVersionFolders[allVersionFolders.length - 1].versionPath}/src`;
+              : `${
+                  allVersionFolders[allVersionFolders.length - 1].versionPath
+                }/src`;
 
             elmFolders.set(pathToPackageWithVersion, false);
           }
@@ -210,7 +212,13 @@ export class ElmWorkspace {
         `Found ${elmFilePaths.length.toString()} files to add to the project`,
       );
 
-      const promiseList = [];
+      if (elmFilePaths.every(a => !a.writable)) {
+        this.connection.window.showErrorMessage(
+          "The path or paths you entered in the 'source-directories' field of your 'elm.json' does not contain any elm files.",
+        );
+      }
+
+      const promiseList: Array<Promise<void>> = [];
       for (const filePath of elmFilePaths) {
         promiseList.push(this.readAndAddToForest(filePath));
       }
@@ -240,7 +248,7 @@ export class ElmWorkspace {
     const globUri = element[0].replace(/\\/g, "/");
 
     return globby
-      .sync(`${globUri}/**/*.elm`)
+      .sync(`${globUri}/**/*.elm`, { suppressErrors: true })
       .map(matchingPath => ({ path: matchingPath, writable: element[1] }));
   }
 
