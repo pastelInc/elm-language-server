@@ -126,10 +126,10 @@ export class ElmWorkspace implements IElmWorkspace {
         `${this.elmFolders.length} source-dirs and test folders found`,
       );
 
-      const elmHome = this.findElmHome();
-      const packagesRoot = `${elmHome}/${elmVersion}/${this.packageOrPackagesFolder(
-        elmVersion,
-      )}/`;
+      const packagesRoot = this.findPackagesRoot(elmVersion);
+      this.connection.console.info(
+        `Reading ${this.packageOrPackagesFolder(elmVersion)} from ${packagesRoot}`,
+      );
       const dependencies: { [index: string]: string } =
         type === "application"
           ? {
@@ -182,6 +182,9 @@ export class ElmWorkspace implements IElmWorkspace {
               uri: pathToPackageWithVersion,
               writeable: false,
             });
+            this.connection.console.info(
+              `Setting ${pathToPackageWithVersion} from ${pathToPackage}`,
+            );
           }
         }
       }
@@ -335,9 +338,17 @@ export class ElmWorkspace implements IElmWorkspace {
 
   private packageOrPackagesFolder(elmVersion: string | undefined): string {
     if (elmVersion === "0.18.0") {
-      return "package";
+      return "packages";
     }
     return elmVersion === "0.19.0" ? "package" : "packages";
+  }
+
+  private findPackagesRoot(elmVersion: string | undefined): string {
+    const elmHome = this.findElmHome();
+    if (elmVersion === "0.18.0") {
+      return `${this.rootPath}/elm-stuff/${this.packageOrPackagesFolder(elmVersion)}/`;
+    }
+    return `${elmHome}/${elmVersion}/${this.packageOrPackagesFolder(elmVersion)}/`
   }
 
   private findElmHome(): string {
