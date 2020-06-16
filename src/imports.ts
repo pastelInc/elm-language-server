@@ -1,12 +1,13 @@
 import Parser, { SyntaxNode, Tree } from "web-tree-sitter";
 import { IForest, ITreeContainer } from "./forest";
-import { Exposing, NodeType, TreeUtils } from "./util/treeUtils";
+import { IExposing, NodeType, TreeUtils } from "./util/treeUtils";
 
 export interface IImport {
   alias: string;
   node: SyntaxNode;
   fromUri: string;
   fromModuleName: string;
+  maintainerAndPackageName?: string;
   type: NodeType;
 }
 
@@ -26,11 +27,11 @@ export class Imports implements IImports {
     let importNodes = this.getVirtualImports();
 
     importNodes = importNodes.concat(
-      TreeUtils.findAllNamedChildrenOfType("import_clause", tree.rootNode) ||
+      TreeUtils.findAllNamedChildrenOfType("import_clause", tree.rootNode) ??
         [],
     );
     if (importNodes) {
-      importNodes.forEach(importNode => {
+      importNodes.forEach((importNode) => {
         const moduleNameNode = TreeUtils.findFirstNamedChildOfType(
           "upper_case_qid",
           importNode,
@@ -46,6 +47,7 @@ export class Imports implements IImports {
                 alias: moduleNameNode.text,
                 fromModuleName: moduleNameNode.text,
                 fromUri: foundModule.uri,
+                maintainerAndPackageName: foundModule.maintainerAndPackageName,
                 node: foundModuleNode,
                 type: "Module",
               });
@@ -60,6 +62,7 @@ export class Imports implements IImports {
                     importNode,
                     exposedFromRemoteModule,
                     foundModule.uri,
+                    foundModule.maintainerAndPackageName,
                   ),
                 );
 
@@ -79,6 +82,7 @@ export class Imports implements IImports {
                         exposedFromRemoteModule,
                         moduleNameNode.text,
                         foundModule.uri,
+                        foundModule.maintainerAndPackageName,
                       ),
                     );
                   } else {
@@ -88,9 +92,9 @@ export class Imports implements IImports {
                     );
                     if (exposedOperators.length > 0) {
                       const exposedNodes = exposedFromRemoteModule.filter(
-                        element => {
+                        (element) => {
                           return exposedOperators.find(
-                            a => a.text === element.name,
+                            (a) => a.text === element.name,
                           );
                         },
                       );
@@ -109,9 +113,9 @@ export class Imports implements IImports {
                     );
                     if (exposedValues) {
                       const exposedNodes = exposedFromRemoteModule.filter(
-                        element => {
+                        (element) => {
                           return exposedValues.find(
-                            a => a.text === element.name,
+                            (a) => a.text === element.name,
                           );
                         },
                       );
@@ -130,8 +134,8 @@ export class Imports implements IImports {
                     );
                     if (exposedType) {
                       const exposedNodes = exposedFromRemoteModule.filter(
-                        element => {
-                          return exposedType.find(a => {
+                        (element) => {
+                          return exposedType.find((a) => {
                             const typeName = TreeUtils.findFirstNamedChildOfType(
                               "upper_case_identifier",
                               a,
@@ -169,15 +173,16 @@ export class Imports implements IImports {
   private getPrefixedCompletions(
     moduleNameNode: SyntaxNode,
     importNode: SyntaxNode,
-    exposed: Exposing,
+    exposed: IExposing[],
     uri: string,
+    maintainerAndPackageName?: string,
   ): IImport[] {
     const result: IImport[] = [];
 
     const importedAs = this.findImportAsClause(importNode);
     const importPrefix = importedAs ? importedAs : moduleNameNode.text;
 
-    exposed.forEach(element => {
+    exposed.forEach((element) => {
       switch (element.type) {
         case "Function":
         case "TypeAlias":
@@ -185,6 +190,7 @@ export class Imports implements IImports {
             alias: `${importPrefix}.${element.name}`,
             fromModuleName: moduleNameNode.text,
             fromUri: uri,
+            maintainerAndPackageName,
             node: element.syntaxNode,
             type: element.type,
           });
@@ -194,16 +200,18 @@ export class Imports implements IImports {
             alias: `${importPrefix}.${element.name}`,
             fromModuleName: moduleNameNode.text,
             fromUri: uri,
+            maintainerAndPackageName,
             node: element.syntaxNode,
             type: element.type,
           });
           if (element.exposedUnionConstructors) {
             result.push(
-              ...element.exposedUnionConstructors.map(a => {
+              ...element.exposedUnionConstructors.map((a) => {
                 return {
                   alias: `${importPrefix}.${a.name}`,
                   fromModuleName: moduleNameNode.text,
                   fromUri: uri,
+                  maintainerAndPackageName,
                   node: a.syntaxNode,
                   type: "UnionConstructor" as NodeType,
                 };
@@ -212,12 +220,13 @@ export class Imports implements IImports {
 
             result.push(
               ...element.exposedUnionConstructors
-                .filter(a => a.accessibleWithoutPrefix)
-                .map(a => {
+                .filter((a) => a.accessibleWithoutPrefix)
+                .map((a) => {
                   return {
                     alias: `${a.name}`,
                     fromModuleName: moduleNameNode.text,
                     fromUri: uri,
+                    maintainerAndPackageName,
                     node: a.syntaxNode,
                     type: "UnionConstructor" as NodeType,
                   };
@@ -271,43 +280,42 @@ import Platform.Sub as Sub exposing ( Sub )
   }
 
   private getAllExposedCompletions(
-    exposed: Exposing,
+    exposed: IExposing[],
     moduleName: string,
     uri: string,
+    maintainerAndPackageName?: string,
   ): IImport[] {
-    const result: IImport[] = [];
-
-    exposed.forEach(element => {
-      result.push({
+    return exposed.map((element: IExposing) => {
+      return {
         alias: element.name,
         fromModuleName: moduleName,
         fromUri: uri,
+        maintainerAndPackageName,
         node: element.syntaxNode,
         type: element.type,
-      });
+      };
     });
-
-    return result;
   }
 
   private exposedNodesToImports(
-    exposedNodes: Array<{
+    exposedNodes: {
       name: string;
       syntaxNode: Parser.SyntaxNode;
       type: NodeType;
-      exposedUnionConstructors?: Array<{
+      exposedUnionConstructors?: {
         name: string;
         syntaxNode: Parser.SyntaxNode;
-      }>;
-    }>,
+      }[];
+    }[],
     moduleNameNode: SyntaxNode,
     foundModule: ITreeContainer,
   ): IImport[] {
-    return exposedNodes.map(a => {
+    return exposedNodes.map((a) => {
       return {
         alias: a.name,
         fromModuleName: moduleNameNode.text,
         fromUri: foundModule.uri,
+        maintainerAndPackageName: foundModule.maintainerAndPackageName,
         node: a.syntaxNode,
         type: a.type,
       };

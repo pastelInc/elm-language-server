@@ -8,36 +8,48 @@ import {
   Position,
   Range,
   TextEdit,
+  CompletionList,
 } from "vscode-languageserver";
+import { URI } from "vscode-uri";
 import { SyntaxNode, Tree } from "web-tree-sitter";
+import { IElmWorkspace } from "../elmWorkspace";
 import { IForest } from "../forest";
 import { IImports } from "../imports";
 import { getEmptyTypes } from "../util/elmUtils";
+import { ElmWorkspaceMatcher } from "../util/elmWorkspaceMatcher";
 import { HintHelper } from "../util/hintHelper";
 import { TreeUtils } from "../util/treeUtils";
+import RANKING_LIST from "./ranking";
+import { ImportUtils } from "../util/importUtils";
+import { RefactorEditUtils } from "../util/refactorEditUtils";
+
+export type CompletionResult =
+  | CompletionItem[]
+  | CompletionList
+  | null
+  | undefined;
 
 export class CompletionProvider {
-  private connection: IConnection;
-  private forest: IForest;
-  private imports: IImports;
-  private qidRegex = /[a-zA-Z0-9\.]+/;
-  private qidAtStartOfLineRegex = /^[a-zA-Z0-9 \.]*$/;
+  private qidRegex = /[a-zA-Z0-9.]+/;
+  private qidAtStartOfLineRegex = /^[a-zA-Z0-9 .]*$/;
 
-  constructor(connection: IConnection, forest: IForest, imports: IImports) {
-    this.connection = connection;
-    this.forest = forest;
-    this.imports = imports;
-
-    this.connection.onCompletion(this.handleCompletionRequest);
+  constructor(private connection: IConnection, elmWorkspaces: IElmWorkspace[]) {
+    connection.onCompletion(
+      new ElmWorkspaceMatcher(elmWorkspaces, (param: CompletionParams) =>
+        URI.parse(param.textDocument.uri),
+      ).handlerForWorkspace(this.handleCompletionRequest),
+    );
   }
 
-  private handleCompletionRequest = (
+  protected handleCompletionRequest = (
     params: CompletionParams,
-  ): CompletionItem[] | null | undefined => {
+    elmWorkspace: IElmWorkspace,
+  ): CompletionResult => {
     this.connection.console.info(`A completion was requested`);
     const completions: CompletionItem[] = [];
 
-    const tree: Tree | undefined = this.forest.getTree(params.textDocument.uri);
+    const forest = elmWorkspace.getForest();
+    const tree: Tree | undefined = forest.getTree(params.textDocument.uri);
 
     if (tree) {
       const nodeAtPosition = TreeUtils.getNamedDescendantForPosition(
@@ -88,6 +100,7 @@ export class CompletionProvider {
             CompletionItemKind.Text,
             nodeAtLineBefore.text,
             replaceRange,
+            "a",
           ),
         ];
       } else if (
@@ -103,6 +116,7 @@ export class CompletionProvider {
             CompletionItemKind.Text,
             nodeAtLineAfter.text,
             replaceRange,
+            "a",
           ),
         ];
       } else if (previousWord && previousWord === "module") {
@@ -125,28 +139,77 @@ export class CompletionProvider {
       ) {
         return this.getSameFileTopLevelCompletions(tree, replaceRange, true);
       } else if (previousWord && previousWord === "import") {
-        return this.getImportableModules(replaceRange);
+        return this.getImportableModules(forest, replaceRange);
       } else if (
-        nodeAtPosition.parent &&
-        nodeAtPosition.parent.type === "exposing_list" &&
-        nodeAtPosition.parent.parent &&
-        nodeAtPosition.parent.parent.type === "import_clause" &&
-        nodeAtPosition.parent.firstNamedChild &&
-        nodeAtPosition.parent.firstNamedChild.type === "exposing"
-      ) {
-        return this.getExposedFromModule(nodeAtPosition.parent, replaceRange);
-      } else if (
-        (nodeAtPosition.type === "comma" ||
-          nodeAtPosition.type === "right_parenthesis") &&
-        nodeAtPosition.parent &&
-        nodeAtPosition.parent.type === "ERROR" &&
-        nodeAtPosition.parent.parent &&
-        nodeAtPosition.parent.parent.type === "exposing_list"
+        nodeAtPosition.parent?.type === "exposing_list" &&
+        nodeAtPosition.parent.parent?.type === "import_clause" &&
+        nodeAtPosition.parent.firstNamedChild?.type === "exposing"
       ) {
         return this.getExposedFromModule(
+          forest,
+          nodeAtPosition.parent,
+          replaceRange,
+        );
+      } else if (
+        (nodeAtPosition.parent?.parent?.type === "exposing_list" &&
+          nodeAtPosition.parent?.parent?.parent?.type === "import_clause" &&
+          nodeAtPosition.parent?.parent.firstNamedChild?.type === "exposing") ||
+        ((nodeAtPosition.type === "comma" ||
+          nodeAtPosition.type === "right_parenthesis") &&
+          nodeAtPosition.parent?.type === "ERROR" &&
+          nodeAtPosition.parent?.parent?.type === "exposing_list")
+      ) {
+        return this.getExposedFromModule(
+          forest,
           nodeAtPosition.parent.parent,
           replaceRange,
         );
+      } else if (nodeAtPosition.parent?.parent?.type === "record_expr") {
+        return this.getRecordCompletions(
+          nodeAtPosition,
+          tree,
+          replaceRange,
+          elmWorkspace.getImports(),
+          params.textDocument.uri,
+          forest,
+        );
+      } else if (
+        (nodeAtPosition.type === "field_access_segment" ||
+          nodeAtPosition.parent?.type === "field_access_segment" ||
+          TreeUtils.descendantsOfType(nodeAtPosition, "field_access_segment")
+            .length > 0) &&
+        nodeAtPosition.parent
+      ) {
+        const accessSegmentNode =
+          nodeAtPosition.type === "field_access_segment"
+            ? nodeAtPosition
+            : nodeAtPosition.parent?.type === "field_access_segment"
+            ? nodeAtPosition.parent
+            : TreeUtils.descendantsOfType(
+                nodeAtPosition,
+                "field_access_segment",
+              )[0];
+
+        const dotIndex = TreeUtils.findFirstNamedChildOfType(
+          "dot",
+          accessSegmentNode,
+        )?.startPosition.column;
+
+        if (dotIndex) {
+          completions.push(
+            ...this.getRecordCompletions(
+              accessSegmentNode,
+              tree,
+              Range.create(
+                Position.create(params.position.line, dotIndex + 1),
+                params.position,
+              ),
+              elmWorkspace.getImports(),
+              params.textDocument.uri,
+              forest,
+            ),
+          );
+        }
       }
 
       completions.push(
@@ -158,14 +221,29 @@ export class CompletionProvider {
 
       completions.push(
         ...this.getCompletionsFromOtherFile(
+          elmWorkspace.getImports(),
           params.textDocument.uri,
           replaceRange,
         ),
       );
 
       completions.push(...this.createSnippets());
+      completions.push(...this.getKeywords());
 
-      return completions;
+      const possibleImportCompletions = this.getPossibleImports(
+        replaceRange,
+        forest,
+        tree,
+        params.textDocument.uri,
+        nodeAtPosition.text,
+      );
+
+      completions.push(...possibleImportCompletions.list);
+
+      return {
+        items: completions,
+        isIncomplete: possibleImportCompletions.isIncomplete,
+      };
     }
   };
 
@@ -181,13 +259,17 @@ export class CompletionProvider {
     return targetLine.slice(currentCharacter, previousWordEnd);
   }
 
-  private getImportableModules(range: Range): CompletionItem[] {
-    return this.forest.treeIndex
-      .filter(a => a.moduleName)
-      .map(a => this.createModuleCompletion(a.moduleName!, range));
+  private getImportableModules(
+    forest: IForest,
+    range: Range,
+  ): CompletionItem[] {
+    return forest.treeIndex
+      .filter((a) => a.moduleName)
+      .map((a) => this.createModuleCompletion(a.moduleName!, range, "b"));
   }
 
   private getExposedFromModule(
+    forest: IForest,
     exposingListNode: SyntaxNode,
     range: Range,
   ): CompletionItem[] | undefined {
@@ -204,63 +286,106 @@ export class CompletionProvider {
       exposingListNode.previousNamedSibling &&
       exposingListNode.previousNamedSibling.type === "upper_case_qid"
     ) {
+      const prefix = "c";
       const moduleName = exposingListNode.previousNamedSibling.text;
-      const exposedByModule = this.forest.getExposingByModuleName(moduleName);
+      const exposedByModule = forest.getExposingByModuleName(moduleName);
       if (exposedByModule) {
-        return exposedByModule.flatMap(a => {
-          const value = HintHelper.createHint(a.syntaxNode);
-          switch (a.type) {
-            case "TypeAlias":
-              return this.createTypeAliasCompletion(value, a.name, range);
-            case "Type":
-              return a.exposedUnionConstructors
-                ? [
-                    this.createTypeCompletion(value, `${a.name}(..)`, range),
-                    this.createTypeCompletion(value, a.name, range),
-                  ]
-                : this.createTypeCompletion(value, a.name, range);
-            default:
-              return this.createFunctionCompletion(value, a.name, range);
-          }
-        });
+        return exposedByModule
+          .map((a) => {
+            const value = HintHelper.createHint(a.syntaxNode);
+            switch (a.type) {
+              case "TypeAlias":
+                return [
+                  this.createTypeAliasCompletion(value, a.name, range, prefix),
+                ];
+              case "Type":
+                return a.exposedUnionConstructors
+                  ? [
+                      this.createTypeCompletion(
+                        value,
+                        `${a.name}(..)`,
+                        range,
+                        prefix,
+                      ),
+                      this.createTypeCompletion(value, a.name, range, prefix),
+                    ]
+                  : [this.createTypeCompletion(value, a.name, range, prefix)];
+              default:
+                return [
+                  this.createFunctionCompletion(value, a.name, range, prefix),
+                ];
+            }
+          })
+          .reduce((a, b) => a.concat(b), []);
       }
     }
   }
 
   private getCompletionsFromOtherFile(
+    imports: IImports,
     uri: string,
     range: Range,
   ): CompletionItem[] {
     const completions: CompletionItem[] = [];
 
-    if (this.imports.imports && this.imports.imports[uri]) {
-      const importList = this.imports.imports[uri];
-      importList.forEach(element => {
+    if (imports.imports && imports.imports[uri]) {
+      const importList = imports.imports[uri];
+      importList.forEach((element) => {
         const value = HintHelper.createHint(element.node);
+        let prefix = "d";
+        if (element.maintainerAndPackageName) {
+          const matchedRanking: string = (RANKING_LIST as {
+            [index: string]: string;
+          })[element.maintainerAndPackageName];
+
+          if (matchedRanking) {
+            prefix = `e${matchedRanking}`;
+          }
+        }
+
         switch (element.type) {
           case "Function":
             completions.push(
-              this.createFunctionCompletion(value, element.alias, range),
+              this.createFunctionCompletion(
+                value,
+                element.alias,
+                range,
+                prefix,
+              ),
             );
             break;
           case "UnionConstructor":
             completions.push(
-              this.createUnionConstructorCompletion(element.alias, range),
+              this.createUnionConstructorCompletion(
+                element.alias,
+                range,
+                prefix,
+              ),
             );
             break;
           case "Operator":
             completions.push(
-              this.createOperatorCompletion(value, element.alias, range),
+              this.createOperatorCompletion(
+                value,
+                element.alias,
+                range,
+                prefix,
+              ),
             );
             break;
           case "Type":
             completions.push(
-              this.createTypeCompletion(value, element.alias, range),
+              this.createTypeCompletion(value, element.alias, range, prefix),
             );
             break;
           case "TypeAlias":
             completions.push(
-              this.createTypeAliasCompletion(value, element.alias, range),
+              this.createTypeAliasCompletion(
+                value,
+                element.alias,
+                range,
+                prefix,
+              ),
             );
             break;
           // Do not handle operators, they are not valid if prefixed
@@ -269,8 +394,8 @@ export class CompletionProvider {
     }
 
     completions.push(
-      ...getEmptyTypes().map(a =>
-        this.createCompletion(a.markdown, a.symbolKind, a.name, range),
+      ...getEmptyTypes().map((a) =>
+        this.createCompletion(a.markdown, a.symbolKind, a.name, range, "d0000"),
       ),
     );
 
@@ -280,16 +405,17 @@ export class CompletionProvider {
   private getSameFileTopLevelCompletions(
     tree: Tree,
     range: Range,
-    moduleDefinition: boolean = false,
+    moduleDefinition = false,
   ): CompletionItem[] {
     const completions: CompletionItem[] = [];
     const topLevelFunctions = TreeUtils.findAllTopLeverFunctionDeclarations(
       tree,
     );
+    const prefix = "b";
     // Add functions
     if (topLevelFunctions) {
       const declarations = topLevelFunctions.filter(
-        a =>
+        (a) =>
           a.firstNamedChild !== null &&
           a.firstNamedChild.type === "function_declaration_left" &&
           a.firstNamedChild.firstNamedChild !== null &&
@@ -302,6 +428,7 @@ export class CompletionProvider {
             value,
             declaration.firstNamedChild!.firstNamedChild!.text,
             range,
+            prefix,
           ),
         );
       }
@@ -316,10 +443,17 @@ export class CompletionProvider {
           declaration,
         );
         if (name) {
-          completions.push(this.createTypeCompletion(value, name.text, range));
+          completions.push(
+            this.createTypeCompletion(value, name.text, range, prefix),
+          );
           if (moduleDefinition) {
             completions.push(
-              this.createTypeCompletion(value, `${name.text}(..)`, range),
+              this.createTypeCompletion(
+                value,
+                `${name.text}(..)`,
+                range,
+                prefix,
+              ),
             );
           }
         }
@@ -338,6 +472,7 @@ export class CompletionProvider {
               this.createUnionConstructorCompletion(
                 unionVariantName.text,
                 range,
+                prefix,
               ),
             );
           }
@@ -355,7 +490,7 @@ export class CompletionProvider {
         );
         if (name) {
           completions.push(
-            this.createTypeAliasCompletion(value, name.text, range),
+            this.createTypeAliasCompletion(value, name.text, range, prefix),
           );
         }
       }
@@ -364,20 +499,86 @@ export class CompletionProvider {
     return completions;
   }
 
+  private getRecordCompletions(
+    node: SyntaxNode,
+    tree: Tree,
+    range: Range,
+    imports: IImports,
+    uri: string,
+    forest: IForest,
+  ): CompletionItem[] {
+    const result: CompletionItem[] = [];
+    let typeDeclarationNode = TreeUtils.getTypeAliasOfRecord(
+      node,
+      tree,
+      imports,
+      uri,
+      forest,
+    )?.node;
+
+    if (!typeDeclarationNode && node.parent?.parent) {
+      typeDeclarationNode = TreeUtils.getTypeAliasOfRecordField(
+        node.parent.parent,
+        tree,
+        imports,
+        uri,
+        forest,
+      )?.node;
+    }
+
+    if (!typeDeclarationNode && node.parent?.parent) {
+      typeDeclarationNode = TreeUtils.getTypeOrTypeAliasOfFunctionRecordParameter(
+        node.parent.parent,
+        tree,
+        imports,
+        uri,
+      );
+    }
+
+    if (typeDeclarationNode) {
+      const fields = TreeUtils.getAllFieldsFromTypeAlias(typeDeclarationNode);
+
+      const typeName =
+        TreeUtils.findFirstNamedChildOfType(
+          "upper_case_identifier",
+          typeDeclarationNode,
+        )?.text ?? "";
+
+      fields?.forEach((element) => {
+        const hint = HintHelper.createHintForTypeAliasReference(
+          element.type,
+          element.field,
+          typeName,
+        );
+        result.push(
+          this.createFieldOrParameterCompletion(hint, element.field, range),
+        );
+      });
+    }
+
+    return result;
+  }
+
   private createFunctionCompletion(
     markdownDocumentation: string | undefined,
     label: string,
     range: Range,
+    sortPrefix: string,
+    detail?: string,
+    addImportTextEdit?: TextEdit,
   ): CompletionItem {
     return this.createCompletion(
       markdownDocumentation,
       CompletionItemKind.Function,
       label,
       range,
+      sortPrefix,
+      detail,
+      addImportTextEdit ? [addImportTextEdit] : undefined,
     );
   }
 
-  private createFunctionParameterCompletion(
+  private createFieldOrParameterCompletion(
     markdownDocumentation: string | undefined,
     label: string,
     range: Range,
@@ -394,12 +595,18 @@ export class CompletionProvider {
     markdownDocumentation: string | undefined,
     label: string,
     range: Range,
+    sortPrefix: string,
+    detail?: string,
+    addImportTextEdit?: TextEdit,
   ): CompletionItem {
     return this.createCompletion(
       markdownDocumentation,
       CompletionItemKind.Enum,
       label,
       range,
+      sortPrefix,
+      detail,
+      addImportTextEdit ? [addImportTextEdit] : undefined,
     );
   }
 
@@ -407,12 +614,18 @@ export class CompletionProvider {
     markdownDocumentation: string | undefined,
     label: string,
     range: Range,
+    sortPrefix: string,
+    detail?: string,
+    addImportTextEdit?: TextEdit,
   ): CompletionItem {
     return this.createCompletion(
       markdownDocumentation,
       CompletionItemKind.Struct,
       label,
       range,
+      sortPrefix,
+      detail,
+      addImportTextEdit ? [addImportTextEdit] : undefined,
     );
   }
 
@@ -420,33 +633,46 @@ export class CompletionProvider {
     markdownDocumentation: string | undefined,
     label: string,
     range: Range,
+    sortPrefix: string,
   ): CompletionItem {
     return this.createCompletion(
       markdownDocumentation,
       CompletionItemKind.Operator,
       label,
       range,
+      sortPrefix,
     );
   }
 
   private createUnionConstructorCompletion(
     label: string,
     range: Range,
+    sortPrefix: string,
+    detail?: string,
+    addImportTextEdit?: TextEdit,
   ): CompletionItem {
     return this.createCompletion(
       undefined,
       CompletionItemKind.EnumMember,
       label,
       range,
+      sortPrefix,
+      detail,
+      addImportTextEdit ? [addImportTextEdit] : undefined,
     );
   }
 
-  private createModuleCompletion(label: string, range: Range): CompletionItem {
+  private createModuleCompletion(
+    label: string,
+    range: Range,
+    sortPrefix: string,
+  ): CompletionItem {
     return this.createCompletion(
       undefined,
       CompletionItemKind.Module,
       label,
       range,
+      sortPrefix,
     );
   }
 
@@ -455,15 +681,23 @@ export class CompletionProvider {
     kind: CompletionItemKind,
     label: string,
     range: Range,
+    sortPrefix: string,
+    detail?: string,
+    additionalTextEdits?: TextEdit[],
   ): CompletionItem {
     return {
-      documentation: {
-        kind: MarkupKind.Markdown,
-        value: markdownDocumentation || "",
-      },
+      documentation: markdownDocumentation
+        ? {
+            kind: MarkupKind.Markdown,
+            value: markdownDocumentation ?? "",
+          }
+        : undefined,
       kind,
       label,
+      sortText: `${sortPrefix}_${label}`,
       textEdit: TextEdit.replace(range, label),
+      detail,
+      additionalTextEdits,
     };
   }
 
@@ -474,10 +708,12 @@ export class CompletionProvider {
     range: Range,
   ): CompletionItem {
     return {
-      documentation: {
-        kind: MarkupKind.Markdown,
-        value: markdownDocumentation || "",
-      },
+      documentation: markdownDocumentation
+        ? {
+            kind: MarkupKind.Markdown,
+            value: markdownDocumentation ?? "",
+          }
+        : undefined,
       kind,
       label,
       preselect: true,
@@ -491,11 +727,12 @@ export class CompletionProvider {
     range: Range,
   ): CompletionItem[] {
     const result: CompletionItem[] = [];
+    const prefix = "a";
     if (node.parent) {
       if (node.parent.type === "let_in_expr") {
         const letNode = TreeUtils.findFirstNamedChildOfType("let", node.parent);
         if (letNode) {
-          letNode.children.forEach(nodeToProcess => {
+          letNode.children.forEach((nodeToProcess) => {
             if (
               nodeToProcess &&
               nodeToProcess.type === "value_declaration" &&
@@ -514,6 +751,7 @@ export class CompletionProvider {
                   value,
                   nodeToProcess.firstNamedChild.firstNamedChild.text,
                   range,
+                  prefix,
                 ),
               );
             }
@@ -533,9 +771,11 @@ export class CompletionProvider {
           node.parent.firstNamedChild.firstNamedChild,
         );
         if (caseBranchVariableNodes) {
-          caseBranchVariableNodes.forEach(a => {
+          caseBranchVariableNodes.forEach((a) => {
             const value = HintHelper.createHintFromDefinitionInCaseBranch();
-            result.push(this.createFunctionCompletion(value, a.text, range));
+            result.push(
+              this.createFunctionCompletion(value, a.text, range, prefix),
+            );
           });
         }
       }
@@ -544,13 +784,13 @@ export class CompletionProvider {
         node.parent.firstChild &&
         node.parent.firstChild.type === "function_declaration_left"
       ) {
-        node.parent.firstChild.children.forEach(child => {
+        node.parent.firstChild.children.forEach((child) => {
           if (child.type === "lower_pattern") {
             const markdownDocumentation = HintHelper.createHintFromFunctionParameter(
               child,
             );
             result.push(
-              this.createFunctionParameterCompletion(
+              this.createFieldOrParameterCompletion(
                 markdownDocumentation,
                 child.text,
                 range,
@@ -570,14 +810,14 @@ export class CompletionProvider {
                   typeDeclarationNode,
                 );
                 if (fields) {
-                  fields.forEach(element => {
+                  fields.forEach((element) => {
                     const hint = HintHelper.createHintForTypeAliasReference(
                       element.type,
                       element.field,
                       child.text,
                     );
                     result.push(
-                      this.createFunctionParameterCompletion(
+                      this.createFieldOrParameterCompletion(
                         hint,
                         `${child.text}.${element.field}`,
                         range,
@@ -596,6 +836,80 @@ export class CompletionProvider {
     return result;
   }
 
+  private getPossibleImports(
+    range: Range,
+    forest: IForest,
+    tree: Tree,
+    uri: string,
+    filterText: string,
+  ): { list: CompletionItem[]; isIncomplete: boolean } {
+    const result: CompletionItem[] = [];
+    const possibleImports = ImportUtils.getPossibleImportsFiltered(
+      forest,
+      uri,
+      filterText,
+    );
+
+    const isIncomplete = possibleImports.length > 50;
+
+    possibleImports.splice(0, 49).forEach((possibleImport, i) => {
+      const documentation = HintHelper.createHint(possibleImport.node);
+      const detail = `Auto import from module '${possibleImport.module}'`;
+      const importTextEdit = RefactorEditUtils.addImport(
+        tree,
+        possibleImport.module,
+        possibleImport.valueToImport ?? possibleImport.value,
+      );
+
+      if (possibleImport.type === "Function") {
+        result.push(
+          this.createFunctionCompletion(
+            documentation,
+            possibleImport.value,
+            range,
+            `e${i}`,
+            detail,
+            importTextEdit,
+          ),
+        );
+      } else if (possibleImport.type === "TypeAlias") {
+        result.push(
+          this.createTypeAliasCompletion(
+            documentation,
+            possibleImport.value,
+            range,
+            `e${i}`,
+            detail,
+            importTextEdit,
+          ),
+        );
+      } else if (possibleImport.type === "Type") {
+        result.push(
+          this.createTypeCompletion(
+            documentation,
+            possibleImport.value,
+            range,
+            `e${i}`,
+            detail,
+            importTextEdit,
+          ),
+        );
+      } else if (possibleImport.type === "UnionConstructor") {
+        result.push(
+          this.createUnionConstructorCompletion(
+            possibleImport.value,
+            range,
+            `e${i}`,
+            detail,
+            importTextEdit,
+          ),
+        );
+      }
+    });
+
+    return { list: result, isIncomplete };
+  }
+
   private createSnippet(
     label: string,
     snippetText: string | string[],
@@ -603,21 +917,22 @@ export class CompletionProvider {
     kind?: CompletionItemKind,
   ): CompletionItem {
     return {
-      documentation: {
-        kind: MarkupKind.Markdown,
-        value: markdownDocumentation || "",
-      },
+      documentation: markdownDocumentation
+        ? {
+            kind: MarkupKind.Markdown,
+            value: markdownDocumentation ?? "",
+          }
+        : undefined,
       insertText: Array.isArray(snippetText)
         ? snippetText.join("\n")
         : snippetText,
       insertTextFormat: InsertTextFormat.Snippet,
-      kind: kind || CompletionItemKind.Snippet,
+      kind: kind ?? CompletionItemKind.Snippet,
       label,
+      sortText: `s_${label}`,
     };
   }
 
-  // tslint:disable: no-duplicate-string
-  // tslint:disable: no-big-function
   private createSnippets() {
     return [
       this.createSnippet(
@@ -638,16 +953,13 @@ export class CompletionProvider {
       ),
       this.createSnippet(
         "case of",
-        [
-          "case ${1:expression} of",
-          "    ${2:option1} ->",
-          "        ${3}",
-          "",
-          "    ${4:option2} ->",
-          "        ${5}",
-          "$0",
-        ],
-        "Case of expression with 2 alternatives",
+        ["case ${1:expression} of$0"],
+        "Case of expression ready to extend (you need to save first)",
+      ),
+      this.createSnippet(
+        "if",
+        [" if ${1:expression} then", "    ${2}", " else", "    ${3}"],
+        "If-Else statement",
       ),
       this.createSnippet("comment", ["{-", "${0}", "-}"], "Multi-line comment"),
       this.createSnippet(
@@ -817,7 +1129,7 @@ export class CompletionProvider {
       this.createSnippet(
         "Browser.sandbox",
         [
-          "module Main exposing (Model, Msg, update, view, subscriptions, init)",
+          "module Main exposing (Model, Msg, update, view, init)",
           "",
           "import Html exposing (..)",
           "import Browser",
@@ -1086,6 +1398,29 @@ export class CompletionProvider {
         "Test block in Elm-test",
       ),
       this.createSnippet("todo", "-- TODO: ${0}", "TODO comment"),
+    ];
+  }
+
+  private createKeywordCompletion(label: string): CompletionItem {
+    return {
+      label,
+      kind: CompletionItemKind.Keyword,
+      sortText: `a_${label}`,
+    };
+  }
+
+  private getKeywords(): CompletionItem[] {
+    return [
+      this.createKeywordCompletion("if"),
+      this.createKeywordCompletion("then"),
+      this.createKeywordCompletion("else"),
+      this.createKeywordCompletion("let"),
+      this.createKeywordCompletion("in"),
+      this.createKeywordCompletion("case"),
+      this.createKeywordCompletion("type"),
+      this.createKeywordCompletion("alias"),
+      this.createKeywordCompletion("import"),
+      this.createKeywordCompletion("exposing"),
     ];
   }
 }

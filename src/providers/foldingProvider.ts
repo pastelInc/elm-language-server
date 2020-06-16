@@ -4,12 +4,12 @@ import {
   FoldingRangeRequestParam,
   IConnection,
 } from "vscode-languageserver";
+import { URI } from "vscode-uri";
 import { SyntaxNode, Tree } from "web-tree-sitter";
-import { IForest } from "../forest";
+import { IElmWorkspace } from "../elmWorkspace";
+import { ElmWorkspaceMatcher } from "../util/elmWorkspaceMatcher";
 
 export class FoldingRangeProvider {
-  private connection: IConnection;
-  private forest: IForest;
   private readonly REGION_CONSTRUCTS: Set<string> = new Set([
     "case_of_expr",
     "value_declaration",
@@ -24,24 +24,28 @@ export class FoldingRangeProvider {
     "else",
   ]);
 
-  constructor(connection: IConnection, forest: IForest) {
-    this.connection = connection;
-    this.forest = forest;
-
-    this.connection.onFoldingRanges(this.handleFoldingRange);
+  constructor(private connection: IConnection, elmWorkspaces: IElmWorkspace[]) {
+    connection.onFoldingRanges(
+      new ElmWorkspaceMatcher(
+        elmWorkspaces,
+        (param: FoldingRangeRequestParam) => URI.parse(param.textDocument.uri),
+      ).handlerForWorkspace(this.handleFoldingRange),
+    );
   }
 
-  protected handleFoldingRange = async (
+  protected handleFoldingRange = (
     param: FoldingRangeRequestParam,
-  ): Promise<FoldingRange[]> => {
+    elmWorkspace: IElmWorkspace,
+  ): FoldingRange[] => {
     this.connection.console.info(`Folding ranges were requested`);
     const folds: FoldingRange[] = [];
-
-    const tree: Tree | undefined = this.forest.getTree(param.textDocument.uri);
+    const forest = elmWorkspace.getForest();
+    const tree: Tree | undefined = forest.getTree(param.textDocument.uri);
 
     const findLastIdenticalNamedSibling: (node: SyntaxNode) => SyntaxNode = (
       node: SyntaxNode,
     ): SyntaxNode => {
+      // eslint-disable-next-line no-constant-condition
       while (true) {
         if (
           node.nextNamedSibling &&
@@ -96,6 +100,7 @@ export class FoldingRangeProvider {
       traverse(tree.rootNode);
     }
 
+    this.connection.console.info(`Returned ${folds.length} folding ranges`);
     return folds;
   };
 }

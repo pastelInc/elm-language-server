@@ -1,8 +1,35 @@
 # elm-language-server
 
-[![Build Status](https://travis-ci.org/elm-tooling/elm-language-server.svg?branch=master)](https://travis-ci.org/elm-tooling/elm-language-server)
+[![Build Status](https://github.com/elm-tooling/elm-language-server/workflows/Lint%20and%20test/badge.svg)](https://github.com/elm-tooling/elm-language-server/actions)
 
 This is the language server implementation for the Elm programming language.
+
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**
+
+- [Installation](#installation)
+  - [Alternative: Compile and install from source](#alternative-compile-and-install-from-source)
+  - [Alternative: Install with Nix](#alternative-install-with-nix)
+- [Requirements](#requirements)
+- [Features](#features)
+- [Server Settings](#server-settings)
+  - [Elm-Analyse Configuration](#elm-analyse-configuration)
+- [Editor Support](#editor-support)
+  - [VSCode](#vscode)
+  - [Vim](#vim)
+    - [coc.nvim](#cocnvim)
+    - [ALE](#ale)
+    - [LanguageClient](#languageclient)
+  - [Kakoune](#kakoune)
+    - [kak-lsp](#kak-lsp)
+  - [Emacs](#emacs)
+    - [Emacs Doom](#emacs-doom)
+  - [Sublime](#sublime)
+- [Awesome libraries this is based on](#awesome-libraries-this-is-based-on)
+- [Contributing](#contributing)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 ## Installation
 
@@ -54,21 +81,22 @@ Or use local versions from your `node_modules` directory, if you want to do that
 
 ## Features
 
-Supports Elm 0.19
+Supports Elm 0.19 and up
 
-| Feature          | Description                                                                                                                                         |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Diagnostics      | Provided via `elm`, `elm-test` and `elm-analyse`                                                                                                    |
-| Formatting       | Provided via `elm-format` and postprocessed to only return a diff of changes. This way it should not be as intrusive as running `elm-format` normal |
-| codeLenses       | Currently only shows if a type alias, custom type or function is exposed from that module                                                           |
-| completions      | Show completions for the current file and snippets                                                                                                  |
-| definitions      | Enables you to jump to the definition of a type alias, module, custom type or function                                                              |
-| documentSymbols  | Identifies all symbols in a document.                                                                                                               |
-| folding          | Let's you fold the code on certain Elm constructs                                                                                                   |
-| hover            | Shows type annotations and documentation for a type alias, module, custom type or function                                                          |
-| references       | Lists all references to a type alias, module, custom type or function                                                                               |
-| rename           | Enables you to rename a type alias, module, custom type or function                                                                                 |
-| workspaceSymbols | Identifies all symbols in the current workspace                                                                                                     |
+| Feature          | Description                                                                                                                                          |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| diagnostics      | Provided via `elm`, `elm-test` and `elm-analyse`                                                                                                     |
+| formatting       | Provided via `elm-format` and post-processed to only return a diff of changes. This way it should not be as intrusive as running `elm-format` normal |
+| codeLenses       | Currently only shows if a type alias, custom type or function is exposed from that module                                                            |
+| completions      | Show completions for the current file and snippets                                                                                                   |
+| definitions      | Enables you to jump to the definition of a type alias, module, custom type or function                                                               |
+| documentSymbols  | Identifies all symbols in a document.                                                                                                                |
+| folding          | Let's you fold the code on certain Elm constructs                                                                                                    |
+| hover            | Shows type annotations and documentation for a type alias, module, custom type or function                                                           |
+| references       | Lists all references to a type alias, module, custom type or function                                                                                |
+| rename           | Enables you to rename a type alias, module, custom type or function                                                                                  |
+| workspaceSymbols | Identifies all symbols in the current workspace                                                                                                      |
+| selectionRange   | Enables navigation by selectionRange (extend selection for e.g.)                                                                                     |
 
 ## Server Settings
 
@@ -105,7 +133,9 @@ Just install the [`elm-tooling/elm-language-client-vscode`](https://github.com/e
 
 ### Vim
 
-There are [general setup instructions for vim](https://github.com/elm-tooling/elm-vim). It's recommended to install [syntax highlighting](https://github.com/andys8/vim-elm-syntax), which also adds the required [detection of elm as `filetype`](https://github.com/andys8/vim-elm-syntax/blob/d614325a037982489574012e4db04d7f8f134c17/ftdetect/elm.vim#L3). A example vim configuration can be found in [elm-vim/vim-config-example](https://github.com/elm-tooling/elm-vim/tree/master/vim-config-example).
+There are [general setup instructions and FAQ for Vim](https://github.com/elm-tooling/elm-vim).
+
+It's recommended to install [syntax highlighting](https://github.com/andys8/vim-elm-syntax), which also adds the required [detection of elm as `filetype`](https://github.com/andys8/vim-elm-syntax/blob/d614325a037982489574012e4db04d7f8f134c17/ftdetect/elm.vim#L3). An example vim configuration can be found in [elm-vim/vim-config-example](https://github.com/elm-tooling/elm-vim/tree/master/vim-config-example).
 
 #### coc.nvim
 
@@ -221,36 +251,50 @@ elmAnalyseTrigger = "change"
 
 The language client is included in [lsp-mode](https://github.com/emacs-lsp/lsp-mode), specifically [here](https://github.com/emacs-lsp/lsp-mode/blob/master/lsp-elm.el). See specifically [this section](https://github.com/emacs-lsp/lsp-mode#use-package) for a minimal use-package configuration for lsp-mode.
 
-### Sublime
+#### Emacs Doom
 
-First install the language server via npm `npm i -g @elm-tooling/elm-language-server`
-Install [Elm Syntax Highlighting](https://packagecontrol.io/packages/Elm%20Syntax%20Highlighting) from Package Control.
-Then we also need the [LSP Package](https://packagecontrol.io/packages/LSP) to be able to connect Sublime to the Language Server.
+- Uncomment `lsp` and `elm` in your configuration file `.doom.d/init.el` and add the `+lsp` feature flag to the elm layer:
 
-Add this to your LSP settings under the `clients` node:
-
-```json
-"elm": {
-    "command": [
-        "elm-language-server"
-    ],
-    "enabled": true,
-    "languageId": "elm",
-    "scopes":
-    [
-        "source.elm"
-    ],
-    "syntaxes":
-    [
-        "Packages/Elm Syntax Highlighting/src/elm.sublime-syntax"
-    ],
-    "initializationOptions": {
-        "elmAnalyseTrigger": "change"
-    }
-}
+```elisp
+lsp
+(elm +lsp)
 ```
 
-You should now be able to use the integrations from Sublime.
+- Optional configuration for [lsp-mode](https://github.com/emacs-lsp/lsp-mode) and [lsp-ui-mode](https://github.com/emacs-lsp/lsp-ui). Add this to your `.doom.d/config.el`:
+
+```elisp
+(after! lsp
+  (setq lsp-enable-symbol-highlighting nil)
+  )
+(after! lsp-ui
+  (setq lsp-ui-doc-max-width 100)
+  (setq lsp-ui-doc-max-height 30)
+  (setq company-lsp-cache-candidates nil)
+  )
+```
+
+- Run `~/.emacs.d/bin/doom sync`
+
+| Feature         | How to use it                                                |
+| --------------- | ------------------------------------------------------------ |
+| Diagnostics     | On by default                                                |
+| Formatting      | On save                                                      |
+| CodeLenses      | `lsp-lens-mode`, `lsp-show-lens`                             |
+| Completions     | On by default                                                |
+| Definitions     | `lsp-find-definition`, `lsp-ui-peek-find-definitions`        |
+| DocumentSymbols | `lsp-ui-imenu`                                               |
+| Folding         | `+fold/open`, `+fold/close`                                  |
+| Hover           | `lsp-ui-sideline-mode`, `lsp-ui-doc-mode`, `lsp-ui-show-doc` |
+| References      | `lsp-ui-peek-find-references`, `lsp-find-references`         |
+| Rename          | `lsp-rename`                                                 |
+| SelectionRange  | `lsp-extend-selection`                                       |
+
+### Sublime
+
+1. Install [Elm Syntax Highlighting](https://packagecontrol.io/packages/Elm%20Syntax%20Highlighting), [LSP](https://packagecontrol.io/packages/LSP) and [LSP-elm](https://packagecontrol.io/packages/LSP-elm) from Package Control.
+1. Restart Sublime.
+
+You should now be able to use the integrations from Sublime. You might want to read about [the features offered](https://lsp.readthedocs.io/en/latest/features/)
 
 ## Awesome libraries this is based on
 

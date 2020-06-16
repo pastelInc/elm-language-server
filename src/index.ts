@@ -14,7 +14,6 @@ import { ILanguageServer } from "./server";
 // Show version for `-v` or `--version` arguments
 if (process.argv[2] === "-v" || process.argv[2] === "--version") {
   // require is used to avoid loading package if not necessary (~30ms time difference)
-  // tslint:disable-next-line no-var-requires
   process.stdout.write(`${require("pjson").version}\n`);
   process.exit(0);
 }
@@ -28,7 +27,11 @@ const connection: IConnection = createConnection(ProposedFeatures.all);
 let server: ILanguageServer;
 
 connection.onInitialize(
-  async (params: InitializeParams): Promise<InitializeResult> => {
+  async (
+    params: InitializeParams,
+    cancel,
+    progress,
+  ): Promise<InitializeResult> => {
     await Parser.init();
     const absolute = Path.join(__dirname, "tree-sitter-elm.wasm");
     const pathToWasm = Path.relative(process.cwd(), absolute);
@@ -40,7 +43,7 @@ connection.onInitialize(
     parser.setLanguage(language);
 
     const { Server } = await import("./server");
-    server = new Server(connection, params, parser);
+    server = new Server(connection, params, parser, progress);
     await server.init();
 
     return server.capabilities;

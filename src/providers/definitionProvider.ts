@@ -6,26 +6,37 @@ import {
   Range,
   TextDocumentPositionParams,
 } from "vscode-languageserver";
+import { URI } from "vscode-uri";
 import { SyntaxNode, Tree } from "web-tree-sitter";
-import { IForest } from "../forest";
-import { IImports } from "../imports";
+import { IElmWorkspace } from "../elmWorkspace";
+import { ElmWorkspaceMatcher } from "../util/elmWorkspaceMatcher";
 import { TreeUtils } from "../util/treeUtils";
 
+export type DefinitionResult =
+  | Location
+  | Location[]
+  | LocationLink[]
+  | null
+  | undefined;
+
 export class DefinitionProvider {
-  constructor(
-    private connection: IConnection,
-    private forest: IForest,
-    private imports: IImports,
-  ) {
-    this.connection.onDefinition(this.handleDefinitionRequest);
+  constructor(private connection: IConnection, elmWorkspaces: IElmWorkspace[]) {
+    this.connection.onDefinition(
+      new ElmWorkspaceMatcher(
+        elmWorkspaces,
+        (param: TextDocumentPositionParams) =>
+          URI.parse(param.textDocument.uri),
+      ).handlerForWorkspace(this.handleDefinitionRequest),
+    );
   }
 
-  protected handleDefinitionRequest = async (
+  protected handleDefinitionRequest = (
     param: TextDocumentPositionParams,
-    // tslint:disable-next-line: max-union-size
-  ): Promise<Location | Location[] | LocationLink[] | null | undefined> => {
+    elmWorkspace: IElmWorkspace,
+  ): DefinitionResult => {
     this.connection.console.info(`A definition was requested`);
-    const tree: Tree | undefined = this.forest.getTree(param.textDocument.uri);
+    const forest = elmWorkspace.getForest();
+    const tree: Tree | undefined = forest.getTree(param.textDocument.uri);
 
     if (tree) {
       const nodeAtPosition = TreeUtils.getNamedDescendantForPosition(
@@ -37,7 +48,8 @@ export class DefinitionProvider {
         nodeAtPosition,
         param.textDocument.uri,
         tree,
-        this.imports,
+        elmWorkspace.getImports(),
+        forest,
       );
 
       if (definitionNode) {

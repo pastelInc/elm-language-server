@@ -4,27 +4,35 @@ import {
   MarkupKind,
   TextDocumentPositionParams,
 } from "vscode-languageserver";
+import { URI } from "vscode-uri";
 import { SyntaxNode, Tree } from "web-tree-sitter";
-import { IForest } from "../forest";
-import { IImports } from "../imports";
+import { IElmWorkspace } from "../elmWorkspace";
 import { getEmptyTypes } from "../util/elmUtils";
+import { ElmWorkspaceMatcher } from "../util/elmWorkspaceMatcher";
 import { HintHelper } from "../util/hintHelper";
 import { NodeType, TreeUtils } from "../util/treeUtils";
 
+type HoverResult = Hover | null | undefined;
+
 export class HoverProvider {
-  constructor(
-    private connection: IConnection,
-    private forest: IForest,
-    private imports: IImports,
-  ) {
-    this.connection.onHover(this.handleHoverRequest);
+  constructor(private connection: IConnection, elmWorkspaces: IElmWorkspace[]) {
+    this.connection.onHover(
+      new ElmWorkspaceMatcher(
+        elmWorkspaces,
+        (param: TextDocumentPositionParams) =>
+          URI.parse(param.textDocument.uri),
+      ).handlerForWorkspace(this.handleHoverRequest),
+    );
   }
 
   protected handleHoverRequest = (
     params: TextDocumentPositionParams,
-  ): Hover | null | undefined => {
+    elmWorkspace: IElmWorkspace,
+  ): HoverResult => {
     this.connection.console.info(`A hover was requested`);
-    const tree: Tree | undefined = this.forest.getTree(params.textDocument.uri);
+
+    const forest = elmWorkspace.getForest();
+    const tree: Tree | undefined = forest.getTree(params.textDocument.uri);
 
     if (tree) {
       const nodeAtPosition = TreeUtils.getNamedDescendantForPosition(
@@ -36,14 +44,14 @@ export class HoverProvider {
         nodeAtPosition,
         params.textDocument.uri,
         tree,
-        this.imports,
+        elmWorkspace.getImports(),
       );
 
       if (definitionNode) {
         return this.createMarkdownHoverFromDefinition(definitionNode);
       } else {
         const specialMatch = getEmptyTypes().find(
-          a => a.name === nodeAtPosition.text,
+          (a) => a.name === nodeAtPosition.text,
         );
         if (specialMatch) {
           return {
@@ -64,7 +72,9 @@ export class HoverProvider {
   ): Hover | undefined {
     if (definitionNode) {
       const value =
-        definitionNode.nodeType === "FunctionParameter"
+        definitionNode.nodeType === "FunctionParameter" ||
+        definitionNode.nodeType === "AnonymousFunctionParameter" ||
+        definitionNode.nodeType === "CasePattern"
           ? HintHelper.createHintFromFunctionParameter(definitionNode.node)
           : HintHelper.createHint(definitionNode.node);
 

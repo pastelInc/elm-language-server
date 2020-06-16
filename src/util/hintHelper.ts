@@ -31,16 +31,18 @@ export class HintHelper {
   ): string {
     return this.formatHint(
       annotation,
-      `Refers to the \`${fieldName}\` field on \`${parentName}\``,
+      parentName
+        ? `Refers to the \`${fieldName}\` field on \`${parentName}\``
+        : `Refers to the \`${fieldName}\` field`,
     );
   }
 
   public static createHintFromDefinitionInLet(
     declaration: SyntaxNode | undefined,
-  ) {
+  ): string | undefined {
     if (declaration) {
-      const comment: string = "Defined in local let scope";
-      let annotation: string = "";
+      const comment = "Defined in local let scope";
+      let annotation = "";
       if (declaration.previousNamedSibling) {
         if (declaration.previousNamedSibling.type === "type_annotation") {
           annotation = declaration.previousNamedSibling.text;
@@ -50,15 +52,41 @@ export class HintHelper {
     }
   }
 
-  public static createHintFromDefinitionInCaseBranch() {
-    const comment: string = "Defined in local case branch";
+  public static createHintFromDefinitionInCaseBranch(): string | undefined {
+    const comment = "Defined in local case branch";
     return this.formatHint("", comment);
   }
 
-  private static createHintFromDefinition(declaration: SyntaxNode | undefined) {
+  private static createHintFromDefinition(
+    declaration: SyntaxNode | undefined,
+  ): string | undefined {
     if (declaration) {
-      let comment: string = "";
-      let annotation: string = "";
+      let code: string | undefined;
+      let comment = "";
+      let annotation = "";
+      if (
+        declaration.type === "type_declaration" ||
+        declaration.type === "type_alias_declaration"
+      ) {
+        code = declaration.text;
+      }
+      if (declaration.type === "union_variant") {
+        if (
+          declaration.parent?.previousNamedSibling?.type !== "block_comment"
+        ) {
+          code = declaration.text;
+
+          if (declaration.parent) {
+            const typeName = TreeUtils.findFirstNamedChildOfType(
+              "upper_case_identifier",
+              declaration.parent,
+            )?.text;
+            comment = `A variant on the union type \`${typeName}\`` || "";
+          }
+        } else {
+          declaration = declaration.parent ? declaration.parent : declaration;
+        }
+      }
       if (declaration.previousNamedSibling) {
         if (declaration.previousNamedSibling.type === "type_annotation") {
           annotation = declaration.previousNamedSibling.text;
@@ -74,13 +102,13 @@ export class HintHelper {
           comment = declaration.previousNamedSibling.text;
         }
       }
-      return this.formatHint(annotation, comment);
+      return this.formatHint(annotation, comment, code);
     }
   }
 
   private static createHintFromModule(moduleNode: SyntaxNode | undefined) {
     if (moduleNode) {
-      let comment: string = "";
+      let comment = "";
       if (
         moduleNode.nextNamedSibling &&
         moduleNode.nextNamedSibling.type === "block_comment"
@@ -91,15 +119,22 @@ export class HintHelper {
     }
   }
 
-  private static formatHint(annotation: string, comment: string) {
+  private static formatHint(
+    annotation: string,
+    comment: string,
+    code?: string,
+  ) {
     let value = "";
     if (annotation) {
       value += this.wrapCodeInMarkdown(annotation);
-    }
-    if (comment) {
-      if (value.length > 0) {
+      if (value.length > 0 && (code || comment)) {
         value += "\n\n---\n\n";
       }
+    }
+    if (code) {
+      value += this.wrapCodeInMarkdown(code);
+    }
+    if (comment) {
       value += this.stripComment(comment);
     }
     return value;

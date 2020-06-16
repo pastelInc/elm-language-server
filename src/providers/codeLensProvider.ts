@@ -7,39 +7,46 @@ import {
   Position,
   Range,
 } from "vscode-languageserver";
+import { URI } from "vscode-uri";
 import { SyntaxNode, Tree } from "web-tree-sitter";
-import { IForest } from "../forest";
-import { IImports } from "../imports";
+import { IElmWorkspace } from "../elmWorkspace";
+import { ElmWorkspaceMatcher } from "../util/elmWorkspaceMatcher";
 import { References } from "../util/references";
 import { TreeUtils } from "../util/treeUtils";
+import { Settings } from "../util/settings";
 
 type CodeLensType = "exposed" | "referenceCounter";
+type CodeLensResult = CodeLens[] | null | undefined;
 
 export class CodeLensProvider {
-  private connection: IConnection;
-  private forest: IForest;
-
   constructor(
-    connection: IConnection,
-    forest: IForest,
-    private imports: IImports,
+    private readonly connection: IConnection,
+    elmWorkspaces: IElmWorkspace[],
+    private settings: Settings,
   ) {
-    this.connection = connection;
-    this.forest = forest;
-
-    this.connection.onCodeLens(this.handleCodeLensRequest);
-    this.connection.onCodeLensResolve(this.handleCodeLensResolveRequest);
+    this.connection.onCodeLens(
+      new ElmWorkspaceMatcher(elmWorkspaces, (param: CodeLensParams) =>
+        URI.parse(param.textDocument.uri),
+      ).handlerForWorkspace(this.handleCodeLensRequest),
+    );
+    this.connection.onCodeLensResolve(
+      new ElmWorkspaceMatcher(elmWorkspaces, (param: CodeLens) =>
+        URI.parse(param.data.uri),
+      ).handlerForWorkspace(this.handleCodeLensResolveRequest),
+    );
   }
 
-  protected handleCodeLensRequest = async (
+  protected handleCodeLensRequest = (
     param: CodeLensParams,
-  ): Promise<CodeLens[] | null | undefined> => {
+    elmWorkspace: IElmWorkspace,
+  ): CodeLensResult => {
     this.connection.console.info(
       `A code lens was requested for ${param.textDocument.uri}`,
     );
     const codeLens: CodeLens[] = [];
 
-    const tree: Tree | undefined = this.forest.getTree(param.textDocument.uri);
+    const forest = elmWorkspace.getForest();
+    const tree: Tree | undefined = forest.getTree(param.textDocument.uri);
 
     if (tree) {
       codeLens.push(
@@ -54,9 +61,10 @@ export class CodeLensProvider {
     }
   };
 
-  protected handleCodeLensResolveRequest = async (
+  protected handleCodeLensResolveRequest = (
     param: CodeLens,
-  ): Promise<CodeLens> => {
+    elmWorkspace: IElmWorkspace,
+  ): CodeLens => {
     const codelens = param;
     const data: {
       codeLensType: CodeLensType;
@@ -65,15 +73,30 @@ export class CodeLensProvider {
       nameNode: string;
       isFunction: boolean;
     } = codelens.data;
-    this.connection.console.info(`A code lens resolve was requested`);
-    const tree = this.forest.getTree(data.uri);
+    this.connection.console.info(
+      `A code lens resolve was requested for ${data.uri}`,
+    );
+    const imports = elmWorkspace.getImports();
+    const forest = elmWorkspace.getForest();
+    const tree = forest.getTree(data.uri);
     if (tree && data.codeLensType) {
       switch (data.codeLensType) {
         case "exposed":
           const exposed = data.isFunction
             ? TreeUtils.isExposedFunction(tree, data.nameNode)
             : TreeUtils.isExposedTypeOrTypeAlias(tree, data.nameNode);
-          codelens.command = exposed
+          codelens.command = this.settings.extendedCapabilities
+            ?.exposeUnexposeSupport
+            ? exposed
+              ? Command.create("exposed", "elm.unexpose", {
+                  uri: data.uri,
+                  name: data.nameNode,
+                })
+              : Command.create("local", "elm.expose", {
+                  uri: data.uri,
+                  name: data.nameNode,
+                })
+            : exposed
             ? Command.create("exposed", "")
             : Command.create("local", "");
 
@@ -87,18 +110,14 @@ export class CodeLensProvider {
             nodeAtPosition,
             data.uri,
             tree,
-            this.imports,
+            imports,
           );
 
-          const references = References.find(
-            definitionNode,
-            this.forest,
-            this.imports,
-          );
+          const references = References.find(definitionNode, forest, imports);
 
           let refLocations: Location[] = [];
           if (references) {
-            refLocations = references.map(a =>
+            refLocations = references.map((a) =>
               Location.create(
                 a.uri,
                 Range.create(
@@ -173,7 +192,7 @@ export class CodeLensProvider {
 
   private getExposingCodeLenses(tree: Tree, uri: string): CodeLens[] {
     const codeLens: CodeLens[] = [];
-    tree.rootNode.children.forEach(node => {
+    tree.rootNode.children.forEach((node) => {
       if (node.type === "value_declaration") {
         const functionName = TreeUtils.getFunctionNameNodeFromDefinition(node);
 
@@ -217,7 +236,7 @@ export class CodeLensProvider {
 
   private getReferencesCodeLenses(tree: Tree, uri: string) {
     const codeLens: CodeLens[] = [];
-    tree.rootNode.children.forEach(node => {
+    tree.rootNode.children.forEach((node) => {
       if (
         node.type === "type_declaration" ||
         node.type === "type_alias_declaration"
@@ -234,7 +253,7 @@ export class CodeLensProvider {
     });
 
     TreeUtils.descendantsOfType(tree.rootNode, "value_declaration").forEach(
-      node => {
+      (node) => {
         const functionName = TreeUtils.getFunctionNameNodeFromDefinition(node);
 
         if (functionName) {

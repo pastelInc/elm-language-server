@@ -5,11 +5,33 @@ import {
   InitializeParams,
   InitializeResult,
 } from "vscode-languageserver";
+import { TextDocument } from "vscode-languageserver-textdocument";
+import { WorkDoneProgress } from "vscode-languageserver/lib/progress";
 import { URI } from "vscode-uri";
 import Parser from "web-tree-sitter";
 import { CapabilityCalculator } from "./capabilityCalculator";
 import { ElmWorkspace } from "./elmWorkspace";
+import {
+  ASTProvider,
+  CodeActionProvider,
+  CodeLensProvider,
+  CompletionProvider,
+  DefinitionProvider,
+  DiagnosticsProvider,
+  DocumentFormattingProvider,
+  DocumentSymbolProvider,
+  ElmAnalyseDiagnostics,
+  ElmMakeDiagnostics,
+  FoldingRangeProvider,
+  HoverProvider,
+  ReferencesProvider,
+  RenameProvider,
+  SelectionRangeProvider,
+  WorkspaceSymbolProvider,
+} from "./providers";
+import { DocumentEvents } from "./util/documentEvents";
 import { Settings } from "./util/settings";
+import { TextDocumentEvents } from "./util/textDocumentEvents";
 
 export interface ILanguageServer {
   readonly capabilities: InitializeResult;
@@ -20,16 +42,16 @@ export interface ILanguageServer {
 export class Server implements ILanguageServer {
   private calculator: CapabilityCalculator;
   private settings: Settings;
-  private elmWorkspaceMap: Map<string, ElmWorkspace> = new Map();
+  private elmWorkspaces: ElmWorkspace[] = [];
 
   constructor(
     private connection: Connection,
     private params: InitializeParams,
     private parser: Parser,
+    private progress: WorkDoneProgress,
   ) {
     this.calculator = new CapabilityCalculator(params.capabilities);
-
-    const initializationOptions = this.params.initializationOptions || {};
+    const initializationOptions = this.params.initializationOptions ?? {};
     this.settings = new Settings(
       this.connection,
       initializationOptions,
@@ -51,7 +73,7 @@ export class Server implements ILanguageServer {
         connection.console.info(
           `Found ${elmJsons.length} elm.json files for workspace ${globUri}`,
         );
-        const listOfElmJsonFolders = elmJsons.map(a =>
+        const listOfElmJsonFolders = elmJsons.map((a) =>
           this.getElmJsonFolder(a),
         );
         const topLevelElmJsons: Map<string, URI> = this.findTopLevelFolders(
@@ -61,9 +83,8 @@ export class Server implements ILanguageServer {
           `Found ${topLevelElmJsons.size} unique elmWorkspaces for workspace ${globUri}`,
         );
 
-        topLevelElmJsons.forEach(elmWorkspace => {
-          this.elmWorkspaceMap.set(
-            elmWorkspace.toString(),
+        topLevelElmJsons.forEach((elmWorkspace) => {
+          this.elmWorkspaces.push(
             new ElmWorkspace(
               elmWorkspace,
               connection,
@@ -89,15 +110,96 @@ export class Server implements ILanguageServer {
     };
   }
 
-  public async init() {
-    this.elmWorkspaceMap.forEach(async it => await it.init());
+  public async init(): Promise<void> {
+    this.progress.begin("Indexing Elm", 0);
+    await Promise.all(
+      this.elmWorkspaces
+        .map((ws) => ({ ws, indexedPercent: 0 }))
+        .map((indexingWs, _, all) =>
+          indexingWs.ws.init((percent: number) => {
+            // update progress for this workspace
+            indexingWs.indexedPercent = percent;
+
+            // report average progress across all workspaces
+            const avgIndexed =
+              all.reduce((sum, { indexedPercent }) => sum + indexedPercent, 0) /
+              all.length;
+            this.progress.report(avgIndexed, `${Math.round(avgIndexed)}%`);
+          }),
+        ),
+    );
+    this.progress.done();
   }
 
-  public async registerInitializedProviders() {
+  public async registerInitializedProviders(): Promise<void> {
     // We can now query the client for up to date settings
     this.settings.initFinished();
 
-    this.elmWorkspaceMap.forEach(it => it.registerInitializedProviders());
+    const documentEvents = new DocumentEvents(this.connection);
+    const textDocumentEvents = new TextDocumentEvents(
+      TextDocument,
+      documentEvents,
+    );
+
+    const settings = await this.settings.getClientSettings();
+
+    const documentFormattingProvider = new DocumentFormattingProvider(
+      this.connection,
+      this.elmWorkspaces,
+      textDocumentEvents,
+      this.settings,
+    );
+
+    const elmAnalyse =
+      settings.elmAnalyseTrigger !== "never"
+        ? new ElmAnalyseDiagnostics(
+            this.connection,
+            this.elmWorkspaces,
+            textDocumentEvents,
+            this.settings,
+            documentFormattingProvider,
+          )
+        : null;
+
+    const elmMake = new ElmMakeDiagnostics(
+      this.connection,
+      this.elmWorkspaces,
+      this.settings,
+    );
+
+    new DiagnosticsProvider(
+      this.connection,
+      this.elmWorkspaces,
+      this.settings,
+      textDocumentEvents,
+      elmAnalyse,
+      elmMake,
+    );
+
+    new CodeActionProvider(
+      this.connection,
+      this.elmWorkspaces,
+      this.settings,
+      elmAnalyse,
+      elmMake,
+    );
+
+    new ASTProvider(
+      this.connection,
+      this.elmWorkspaces,
+      documentEvents,
+      this.parser,
+    );
+    new FoldingRangeProvider(this.connection, this.elmWorkspaces);
+    new CompletionProvider(this.connection, this.elmWorkspaces);
+    new HoverProvider(this.connection, this.elmWorkspaces);
+    new DefinitionProvider(this.connection, this.elmWorkspaces);
+    new ReferencesProvider(this.connection, this.elmWorkspaces);
+    new DocumentSymbolProvider(this.connection, this.elmWorkspaces);
+    new WorkspaceSymbolProvider(this.connection, this.elmWorkspaces);
+    new CodeLensProvider(this.connection, this.elmWorkspaces, this.settings);
+    new SelectionRangeProvider(this.connection, this.elmWorkspaces);
+    new RenameProvider(this.connection, this.elmWorkspaces);
   }
 
   private getElmJsonFolder(uri: string): URI {
@@ -105,18 +207,17 @@ export class Server implements ILanguageServer {
   }
 
   private findTopLevelFolders(listOfElmJsonFolders: URI[]) {
-    const result: Map<string, URI> = new Map();
-    listOfElmJsonFolders.forEach(element => {
-      result.set(element.toString(), element);
+    const result: Map<string, URI> = new Map<string, URI>();
+    listOfElmJsonFolders.forEach((uri) => {
+      result.set(uri.fsPath, uri);
     });
 
-    listOfElmJsonFolders.forEach(a => {
-      listOfElmJsonFolders.forEach(b => {
-        if (
-          b.toString() !== a.toString() &&
-          b.toString().startsWith(a.toString())
-        ) {
-          result.delete(b.toString());
+    listOfElmJsonFolders.forEach((parentUri) => {
+      listOfElmJsonFolders.forEach((childUri) => {
+        const parentPath = parentUri.fsPath + path.sep;
+        const childPath = childUri.fsPath + path.sep;
+        if (parentPath !== childPath && childPath.startsWith(parentPath)) {
+          result.delete(childUri.fsPath);
         }
       });
     });

@@ -6,31 +6,40 @@ import {
   VersionedTextDocumentIdentifier,
 } from "vscode-languageserver";
 import { URI } from "vscode-uri";
-import Parser, { Point, SyntaxNode, Tree } from "web-tree-sitter";
-import { IForest } from "../forest";
-import { IImports } from "../imports";
-import { Position } from "../position";
-import { DocumentEvents } from "../util/documentEvents";
+import Parser, { Tree } from "web-tree-sitter";
+import { IElmWorkspace } from "../elmWorkspace";
+import { IDocumentEvents } from "../util/documentEvents";
+import { ElmWorkspaceMatcher } from "../util/elmWorkspaceMatcher";
 
 export class ASTProvider {
   constructor(
     private connection: IConnection,
-    private forest: IForest,
-    events: DocumentEvents,
-    private imports: IImports,
+    elmWorkspaces: IElmWorkspace[],
+    documentEvents: IDocumentEvents,
     private parser: Parser,
   ) {
-    events.on("change", this.handleChangeTextDocument);
+    documentEvents.on(
+      "change",
+      new ElmWorkspaceMatcher(
+        elmWorkspaces,
+        (params: DidChangeTextDocumentParams) =>
+          URI.parse(params.textDocument.uri),
+      ).handlerForWorkspace(this.handleChangeTextDocument),
+    );
   }
 
-  protected handleChangeTextDocument = async (
+  protected handleChangeTextDocument = (
     params: DidChangeTextDocumentParams,
-  ): Promise<void> => {
+    elmWorkspace: IElmWorkspace,
+  ): void => {
     this.connection.console.info(
       `Changed text document, going to parse it. ${params.textDocument.uri}`,
     );
+    const forest = elmWorkspace.getForest();
+    const imports = elmWorkspace.getImports();
     const document: VersionedTextDocumentIdentifier = params.textDocument;
-    let tree: Tree | undefined = this.forest.getTree(document.uri);
+
+    let tree: Tree | undefined = forest.getTree(document.uri);
     if (tree === undefined) {
       const fileContent: string = readFileSync(
         URI.parse(document.uri).fsPath,
@@ -40,58 +49,28 @@ export class ASTProvider {
     }
 
     for (const changeEvent of params.contentChanges) {
-      if (changeEvent.range && changeEvent.rangeLength) {
-        // range is range of the change. end is exclusive
-        // rangeLength is length of text removed
-        // text is new text
-        const { range, rangeLength, text } = changeEvent;
-        const startIndex: number = range.start.line * range.start.character;
-        const oldEndIndex: number = startIndex + rangeLength - 1;
-        if (tree) {
-          tree.edit({
-            // end index for new version of text
-            newEndIndex: range.end.line * range.end.character - 1,
-            // position in new doc change ended
-            newEndPosition: Position.FROM_VS_POSITION(range.end).toTSPosition(),
-
-            // end index for old version of text
-            oldEndIndex,
-            // position in old doc change ended.
-            oldEndPosition: this.computeEndPosition(
-              startIndex,
-              oldEndIndex,
-              tree,
-            ),
-
-            // index in old doc the change started
-            startIndex,
-            // position in old doc change started
-            startPosition: Position.FROM_VS_POSITION(
-              range.start,
-            ).toTSPosition(),
-          });
-          tree = this.parser.parse(text, tree);
-        }
-      } else {
-        tree = this.parser.parse(changeEvent.text);
-      }
+      tree = this.parser.parse(changeEvent.text);
     }
     if (tree) {
-      this.forest.setTree(document.uri, true, true, tree);
-      this.imports.updateImports(document.uri, tree, this.forest);
+      forest.setTree(document.uri, true, true, tree, true);
+
+      // Figure out if we have files importing our changed file - update them
+      const urisToRefresh = [];
+      for (const uri in imports.imports) {
+        if (imports.imports.hasOwnProperty(uri)) {
+          const fileImports = imports.imports[uri];
+
+          if (fileImports.some((a) => a.fromUri === document.uri)) {
+            urisToRefresh.push(uri);
+          }
+        }
+      }
+      urisToRefresh.forEach((a) => {
+        imports.updateImports(a, forest.getTree(a)!, forest);
+      });
+
+      // Refresh imports of the calling file
+      imports.updateImports(document.uri, tree, forest);
     }
-  };
-
-  private computeEndPosition = (
-    startIndex: number,
-    endIndex: number,
-    tree: Tree,
-  ): Point => {
-    const node: SyntaxNode = tree.rootNode.descendantForIndex(
-      startIndex,
-      endIndex,
-    );
-
-    return node.endPosition;
   };
 }

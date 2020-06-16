@@ -3,26 +3,38 @@ import {
   IConnection,
   TextEdit,
 } from "vscode-languageserver";
+import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
+import { IElmWorkspace } from "../elmWorkspace";
 import * as Diff from "../util/diff";
 import { execCmd } from "../util/elmUtils";
+import { ElmWorkspaceMatcher } from "../util/elmWorkspaceMatcher";
 import { Settings } from "../util/settings";
 import { TextDocumentEvents } from "../util/textDocumentEvents";
+
+type DocumentFormattingResult = Promise<TextEdit[] | undefined>;
 
 export class DocumentFormattingProvider {
   constructor(
     private connection: IConnection,
-    private elmWorkspaceFolder: URI,
-    private events: TextDocumentEvents,
+    elmWorkspaces: IElmWorkspace[],
+    private events: TextDocumentEvents<TextDocument>,
     private settings: Settings,
   ) {
-    this.connection.onDocumentFormatting(this.handleFormattingRequest);
+    this.connection.onDocumentFormatting(
+      new ElmWorkspaceMatcher(
+        elmWorkspaces,
+        (params: DocumentFormattingParams) =>
+          URI.parse(params.textDocument.uri),
+      ).handlerForWorkspace(this.handleFormattingRequest),
+    );
   }
 
   public formatText = async (
+    elmWorkspaceRootPath: URI,
     elmFormatPath: string,
     text: string,
-  ): Promise<TextEdit[] | undefined> => {
+  ): DocumentFormattingResult => {
     const options = {
       cmdArguments: ["--stdin", "--elm-version", "0.19", "--yes"],
       notFoundText: "Install elm-format via 'npm install -g elm-format",
@@ -33,7 +45,7 @@ export class DocumentFormattingProvider {
         elmFormatPath,
         "elm-format",
         options,
-        this.elmWorkspaceFolder.fsPath,
+        elmWorkspaceRootPath.fsPath,
         this.connection,
         text,
       );
@@ -45,7 +57,8 @@ export class DocumentFormattingProvider {
 
   protected handleFormattingRequest = async (
     params: DocumentFormattingParams,
-  ) => {
+    elmWorkspace: IElmWorkspace,
+  ): DocumentFormattingResult => {
     this.connection.console.info(`Formatting was requested`);
     try {
       const text = this.events.get(params.textDocument.uri);
@@ -55,7 +68,11 @@ export class DocumentFormattingProvider {
       }
 
       const settings = await this.settings.getClientSettings();
-      return await this.formatText(settings.elmFormatPath, text.getText());
+      return await this.formatText(
+        elmWorkspace.getRootPath(),
+        settings.elmFormatPath,
+        text.getText(),
+      );
     } catch (error) {
       (error.message as string).includes("SYNTAX PROBLEM")
         ? this.connection.console.error(

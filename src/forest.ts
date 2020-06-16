@@ -1,27 +1,31 @@
 import { Tree } from "web-tree-sitter";
-import { Exposing, TreeUtils } from "./util/treeUtils";
+import { IExposing, TreeUtils } from "./util/treeUtils";
 
 export interface ITreeContainer {
   uri: string;
-  writable: boolean;
+  writeable: boolean;
   referenced: boolean;
   moduleName?: string;
-  exposing?: Exposing;
+  maintainerAndPackageName?: string;
+  exposing?: IExposing[]; // This file exposes
   tree: Tree;
+  isExposed: boolean; // Is this file exposed by the elm.json
 }
 
 export interface IForest {
   treeIndex: ITreeContainer[];
   getTree(uri: string): Tree | undefined;
-  getExposingByModuleName(moduleName: string): Exposing | undefined;
+  getExposingByModuleName(moduleName: string): IExposing[] | undefined;
   getTreeByModuleName(moduleName: string): Tree | undefined;
   getByModuleName(moduleName: string): ITreeContainer | undefined;
   getByUri(uri: string): ITreeContainer | undefined;
   setTree(
     uri: string,
-    writable: boolean,
+    writeable: boolean,
     referenced: boolean,
     tree: Tree,
+    isExposed: boolean,
+    packageName?: string,
   ): void;
   removeTree(uri: string): void;
 }
@@ -30,52 +34,62 @@ export class Forest implements IForest {
   public treeIndex: ITreeContainer[] = [];
 
   public getTree(uri: string): Tree | undefined {
-    const result = this.treeIndex.find(tree => tree.uri === uri);
+    const result = this.treeIndex.find((tree) => tree.uri === uri);
 
     return result && result.tree;
   }
 
-  public getExposingByModuleName(moduleName: string): Exposing | undefined {
-    const result = this.treeIndex.find(tree => tree.moduleName === moduleName);
+  public getExposingByModuleName(moduleName: string): IExposing[] | undefined {
+    const result = this.treeIndex.find(
+      (tree) => tree.moduleName === moduleName && tree.isExposed,
+    );
     return result && result.exposing;
   }
 
   public getTreeByModuleName(moduleName: string): Tree | undefined {
-    const result = this.treeIndex.find(tree => tree.moduleName === moduleName);
+    const result = this.treeIndex.find(
+      (tree) => tree.moduleName === moduleName,
+    );
 
     return result && result.tree;
   }
 
   public getByModuleName(moduleName: string): ITreeContainer | undefined {
-    return this.treeIndex.find(tree => tree.moduleName === moduleName);
+    return this.treeIndex.find(
+      (tree) => tree.moduleName === moduleName && tree.isExposed,
+    );
   }
 
   public getByUri(uri: string): ITreeContainer | undefined {
-    return this.treeIndex.find(tree => tree.uri === uri);
+    return this.treeIndex.find((tree) => tree.uri === uri);
   }
 
   public setTree(
     uri: string,
-    writable: boolean,
+    writeable: boolean,
     referenced: boolean,
     tree: Tree,
+    isExposed: boolean,
+    maintainerAndPackageName?: string,
   ): void {
     const moduleResult = TreeUtils.getModuleNameAndExposing(tree);
     let moduleName: string | undefined;
-    let exposing: Exposing | undefined;
+    let exposing: IExposing[] | undefined;
     if (moduleResult) {
       ({ moduleName, exposing } = moduleResult);
     }
 
-    const existingTree = this.treeIndex.findIndex(a => a.uri === uri);
+    const existingTree = this.treeIndex.findIndex((a) => a.uri === uri);
 
     const treeContainer = {
       exposing,
+      maintainerAndPackageName,
       moduleName,
       referenced,
       tree,
       uri,
-      writable,
+      writeable,
+      isExposed,
     };
 
     if (existingTree === -1) {
@@ -87,6 +101,6 @@ export class Forest implements IForest {
 
   public removeTree(uri: string): void {
     // Not sure this is the best way to do this...
-    this.treeIndex = this.treeIndex.filter(tree => tree.uri !== uri);
+    this.treeIndex = this.treeIndex.filter((tree) => tree.uri !== uri);
   }
 }

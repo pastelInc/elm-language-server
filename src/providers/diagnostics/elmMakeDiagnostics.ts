@@ -1,5 +1,5 @@
+/* eslint-disable @typescript-eslint/no-unsafe-call */
 import { randomBytes } from "crypto";
-import execa = require("execa");
 import * as path from "path";
 import {
   CodeAction,
@@ -10,13 +10,24 @@ import {
   TextEdit,
 } from "vscode-languageserver";
 import { URI } from "vscode-uri";
+import { IElmWorkspace } from "../../elmWorkspace";
 import * as utils from "../../util/elmUtils";
 import { execCmd } from "../../util/elmUtils";
+import { ElmWorkspaceMatcher } from "../../util/elmWorkspaceMatcher";
 import { Settings } from "../../util/settings";
 import { IElmIssue } from "./diagnosticsProvider";
 import { ElmDiagnosticsHelper } from "./elmDiagnosticsHelper";
+import execa = require("execa");
+import { RefactorEditUtils } from "../../util/refactorEditUtils";
+import { ImportUtils } from "../../util/importUtils";
+import { TreeUtils } from "../../util/treeUtils";
+import { Utils } from "../../util/utils";
+import { ITreeContainer } from "../../forest";
+import { Forest } from "../../forest";
+import { IImports } from "../../imports";
 
 const ELM_MAKE = "Elm";
+const NAMING_ERROR = "NAMING ERROR";
 const RANDOM_ID = randomBytes(16).toString("hex");
 export const CODE_ACTION_ELM_MAKE = `elmLS.elmMakeFixer-${RANDOM_ID}`;
 
@@ -29,7 +40,7 @@ export interface IElmError {
   title: string;
   type: string;
   path: string;
-  message: Array<string | IStyledString>;
+  message: (string | IStyledString)[];
 }
 
 export interface IError {
@@ -44,7 +55,7 @@ export interface IProblem {
     start: { line: number; column: number };
     end: { line: number; column: number };
   };
-  message: Array<string | IStyledString>;
+  message: (string | IStyledString)[];
 }
 
 export interface IStyledString {
@@ -55,26 +66,104 @@ export interface IStyledString {
 }
 
 export class ElmMakeDiagnostics {
+  private elmWorkspaceMatcher: ElmWorkspaceMatcher<URI>;
+  private neededImports: Map<
+    string,
+    { moduleName: string; valueName?: string; diagnostic: Diagnostic }[]
+  > = new Map<
+    string,
+    { moduleName: string; valueName?: string; diagnostic: Diagnostic }[]
+  >();
+
   constructor(
     private connection: IConnection,
-    private elmWorkspaceFolder: URI,
+    elmWorkspaces: IElmWorkspace[],
     private settings: Settings,
-  ) {}
+  ) {
+    this.elmWorkspaceMatcher = new ElmWorkspaceMatcher(
+      elmWorkspaces,
+      (uri) => uri,
+    );
+  }
 
   public createDiagnostics = async (
     filePath: URI,
   ): Promise<Map<string, Diagnostic[]>> => {
-    return await this.checkForErrors(
-      this.elmWorkspaceFolder.fsPath,
+    const workspaceRootPath = this.elmWorkspaceMatcher
+      .getElmWorkspaceFor(filePath)
+      .getRootPath();
+    const diagnostics = await this.checkForErrors(
+      workspaceRootPath.fsPath,
       filePath.fsPath,
-    ).then(issues => {
+    ).then((issues) => {
       return issues.length === 0
         ? new Map([[filePath.toString(), []]])
-        : ElmDiagnosticsHelper.issuesToDiagnosticMap(
-            issues,
-            this.elmWorkspaceFolder,
-          );
+        : ElmDiagnosticsHelper.issuesToDiagnosticMap(issues, workspaceRootPath);
     });
+
+    // Handle import all
+    const forest = this.elmWorkspaceMatcher
+      .getElmWorkspaceFor(filePath)
+      .getForest();
+
+    const exposedValues = ImportUtils.getPossibleImports(
+      forest,
+      filePath.fsPath,
+    );
+
+    // Get all possible imports from the diagnostics for import all
+    diagnostics.forEach((innerDiagnostics, uri) => {
+      const sourceTree = forest.getByUri(uri);
+      this.neededImports.set(uri, []);
+
+      innerDiagnostics.forEach((diagnostic) => {
+        if (diagnostic.message.startsWith(NAMING_ERROR)) {
+          const valueNode = sourceTree?.tree.rootNode.namedDescendantForPosition(
+            {
+              column: diagnostic.range.start.character,
+              row: diagnostic.range.start.line,
+            },
+            {
+              column: diagnostic.range.end.character,
+              row: diagnostic.range.end.line,
+            },
+          );
+
+          // Find imports
+          if (valueNode) {
+            exposedValues
+              .filter(
+                (exposed) =>
+                  exposed.value === valueNode.text ||
+                  ((valueNode.type === "upper_case_qid" ||
+                    valueNode.type === "value_qid") &&
+                    exposed.value ===
+                      valueNode.namedChildren[
+                        valueNode.namedChildren.length - 1
+                      ].text &&
+                    exposed.module === valueNode.namedChildren[0].text),
+              )
+              .forEach((exposed, i) => {
+                if (i === 0) {
+                  this.neededImports.get(uri)?.push({
+                    moduleName: exposed.module,
+                    valueName:
+                      valueNode.type !== "upper_case_qid" &&
+                      valueNode.type !== "value_qid"
+                        ? exposed.valueToImport
+                          ? exposed.valueToImport
+                          : exposed.value
+                        : undefined,
+                    diagnostic,
+                  });
+                }
+              });
+          }
+        }
+      });
+    });
+
+    return diagnostics;
   };
 
   public onCodeAction(params: CodeActionParams): CodeAction[] {
@@ -91,9 +180,100 @@ export class ElmMakeDiagnostics {
     uri: string,
   ): CodeAction[] {
     const result: CodeAction[] = [];
-    diagnostics.forEach(diagnostic => {
+
+    const forest = this.elmWorkspaceMatcher
+      .getElmWorkspaceFor(URI.parse(uri))
+      .getForest();
+
+    const exposedValues = ImportUtils.getPossibleImports(forest, uri);
+
+    const imports = this.elmWorkspaceMatcher
+      .getElmWorkspaceFor(URI.parse(uri))
+      .getImports();
+
+    const sourceTree = forest.getByUri(uri);
+
+    diagnostics.forEach((diagnostic) => {
+      if (diagnostic.message.startsWith(NAMING_ERROR)) {
+        const valueNode = sourceTree?.tree.rootNode.namedDescendantForPosition(
+          {
+            column: diagnostic.range.start.character,
+            row: diagnostic.range.start.line,
+          },
+          {
+            column: diagnostic.range.end.character,
+            row: diagnostic.range.end.line,
+          },
+        );
+
+        let hasImportFix = false;
+
+        // Add import quick fixes
+        if (valueNode) {
+          exposedValues
+            .filter(
+              (exposed) =>
+                exposed.value === valueNode.text ||
+                ((valueNode.type === "upper_case_qid" ||
+                  valueNode.type === "value_qid") &&
+                  exposed.value ===
+                    valueNode.namedChildren[valueNode.namedChildren.length - 1]
+                      .text &&
+                  exposed.module ===
+                    valueNode.namedChildren
+                      .slice(0, valueNode.namedChildren.length - 2) // Dots are also namedNodes
+                      .map((a) => a.text)
+                      .join("")),
+            )
+            .forEach((exposed) => {
+              hasImportFix = true;
+              result.push(
+                this.createImportQuickFix(
+                  uri,
+                  diagnostic,
+                  exposed.module,
+                  valueNode.type !== "upper_case_qid" &&
+                    valueNode.type !== "value_qid"
+                    ? exposed.valueToImport
+                      ? exposed.valueToImport
+                      : exposed.value
+                    : undefined,
+                ),
+              );
+            });
+        }
+
+        // Add import all quick fix
+        const filteredImports =
+          this.neededImports
+            .get(uri)
+            ?.filter(
+              (data, i, array) =>
+                array.findIndex(
+                  (d) =>
+                    data.moduleName === d.moduleName &&
+                    data.valueName === d.valueName,
+                ) === i,
+            ) ?? [];
+
+        if (hasImportFix && filteredImports.length > 1) {
+          // Sort so that the first diagnostic is this one
+          this.neededImports
+            .get(uri)
+            ?.sort((a, b) =>
+              a.diagnostic.message === diagnostic.message
+                ? -1
+                : b.diagnostic.message === diagnostic.message
+                ? 1
+                : 0,
+            );
+
+          result.push(this.createImportAllQuickFix(uri));
+        }
+      }
+
       if (
-        diagnostic.message.startsWith("NAMING ERROR") ||
+        diagnostic.message.startsWith(NAMING_ERROR) ||
         diagnostic.message.startsWith("BAD IMPORT") ||
         diagnostic.message.startsWith("UNKNOWN LICENSE") ||
         diagnostic.message.startsWith("UNKNOWN PACKAGE") ||
@@ -103,7 +283,6 @@ export class ElmMakeDiagnostics {
         const regex = /^\s{4}#(.*)#$/gm;
         let matches;
 
-        // tslint:disable-next-line: no-conditional-assignment
         while ((matches = regex.exec(diagnostic.message)) !== null) {
           // This is necessary to avoid infinite loops with zero-width matches
           if (matches.index === regex.lastIndex) {
@@ -112,8 +291,15 @@ export class ElmMakeDiagnostics {
 
           matches
             .filter((_, groupIndex) => groupIndex === 1)
-            .forEach((match, _) => {
-              result.push(this.createQuickFix(uri, match, diagnostic));
+            .forEach((match) => {
+              result.push(
+                this.createQuickFix(
+                  uri,
+                  match,
+                  diagnostic,
+                  `Change to \`${match}\``,
+                ),
+              );
             });
         }
       } else if (
@@ -125,17 +311,174 @@ export class ElmMakeDiagnostics {
 
         const matches = regex.exec(diagnostic.message);
         if (matches !== null) {
-          result.push(this.createQuickFix(uri, matches[1], diagnostic));
+          result.push(
+            this.createQuickFix(
+              uri,
+              matches[1],
+              diagnostic,
+              `Change to \`${matches[1]}\``,
+            ),
+          );
         }
+      } else if (diagnostic.message.startsWith("UNFINISHED CASE")) {
+        // Offer the case completion only if we're at the `of`
+        const regex = /^\d+\|\s*.* of\s+\s+#\^#/gm;
+
+        const matches = regex.exec(diagnostic.message);
+        if (matches !== null) {
+          result.push(
+            ...this.addCaseQuickfixes(
+              sourceTree,
+              diagnostic,
+              imports,
+              uri,
+              forest,
+            ),
+          );
+        }
+      } else if (
+        diagnostic.message.startsWith("MISSING PATTERNS - This `case`")
+      ) {
+        result.push(
+          ...this.addCaseQuickfixes(
+            sourceTree,
+            diagnostic,
+            imports,
+            uri,
+            forest,
+          ),
+        );
       }
     });
     return result;
+  }
+
+  private addCaseQuickfixes(
+    sourceTree: ITreeContainer | undefined,
+    diagnostic: Diagnostic,
+    imports: IImports,
+    uri: string,
+    forest: Forest,
+  ): CodeAction[] {
+    const result = [];
+    const valueNode = sourceTree?.tree.rootNode.namedDescendantForPosition(
+      {
+        column: diagnostic.range.start.character,
+        row: diagnostic.range.start.line,
+      },
+      {
+        column: diagnostic.range.end.character,
+        row: diagnostic.range.end.line,
+      },
+    );
+
+    if (valueNode) {
+      if (
+        valueNode.firstNamedChild?.type === "case" &&
+        valueNode.namedChildren.length > 1 &&
+        valueNode.namedChildren[1].type === "value_expr"
+      ) {
+        const indent = "    ".repeat(
+          (valueNode.firstNamedChild?.startPosition.column % 4) + 1,
+        );
+
+        const typeDeclarationNode = TreeUtils.getTypeAliasOfCase(
+          valueNode.namedChildren[1].firstNamedChild!.firstNamedChild!,
+          sourceTree!.tree,
+          imports,
+          uri,
+          forest,
+        );
+
+        if (typeDeclarationNode) {
+          const fields = TreeUtils.findAllNamedChildrenOfType(
+            "union_variant",
+            typeDeclarationNode.node,
+          );
+
+          const alreadyAvailableBranches = TreeUtils.findAllNamedChildrenOfType(
+            "case_of_branch",
+            valueNode,
+          )
+            ?.map(
+              (a) => a.firstNamedChild?.firstNamedChild?.firstNamedChild?.text,
+            )
+            .filter(Utils.notUndefined);
+
+          let edit = "";
+          fields?.forEach((unionVariant) => {
+            if (
+              !alreadyAvailableBranches?.includes(
+                unionVariant.firstNamedChild!.text,
+              )
+            ) {
+              const parameters = TreeUtils.findAllNamedChildrenOfType(
+                "type_ref",
+                unionVariant,
+              );
+
+              const caseBranch = `${[
+                unionVariant.firstNamedChild!.text,
+                parameters
+                  ?.map((a) =>
+                    a.firstNamedChild?.lastNamedChild?.text.toLowerCase(),
+                  )
+                  .join(" "),
+              ].join(" ")}`;
+
+              edit += `\n${indent}    ${caseBranch} ->\n${indent}        \n`;
+            }
+          });
+
+          result.push(
+            this.createCaseQuickFix(
+              uri,
+              edit,
+              diagnostic,
+              `Add missing case branches`,
+            ),
+          );
+        }
+      }
+
+      result.push(
+        this.createCaseQuickFix(
+          uri,
+          "\n\n        _ ->\n    ",
+          diagnostic,
+          `Add \`_\` branch`,
+        ),
+      );
+    }
+    return result;
+  }
+
+  private createCaseQuickFix(
+    uri: string,
+    replaceWith: string,
+    diagnostic: Diagnostic,
+    title: string,
+  ): CodeAction {
+    const map: {
+      [uri: string]: TextEdit[];
+    } = {};
+    if (!map[uri]) {
+      map[uri] = [];
+    }
+    map[uri].push(TextEdit.insert(diagnostic.range.end, replaceWith));
+    return {
+      diagnostics: [diagnostic],
+      edit: { changes: map },
+      kind: CodeActionKind.QuickFix,
+      title,
+    };
   }
 
   private createQuickFix(
     uri: string,
     replaceWith: string,
     diagnostic: Diagnostic,
+    title: string,
   ): CodeAction {
     const map: {
       [uri: string]: TextEdit[];
@@ -148,12 +491,80 @@ export class ElmMakeDiagnostics {
       diagnostics: [diagnostic],
       edit: { changes: map },
       kind: CodeActionKind.QuickFix,
-      title: replaceWith,
+      title,
+    };
+  }
+
+  private createImportQuickFix(
+    uri: string,
+    diagnostic: Diagnostic,
+    moduleName: string,
+    nameToImport?: string,
+  ): CodeAction {
+    const changes: {
+      [uri: string]: TextEdit[];
+    } = {};
+    if (!changes[uri]) {
+      changes[uri] = [];
+    }
+
+    const tree = this.elmWorkspaceMatcher
+      .getElmWorkspaceFor(URI.parse(uri))
+      .getForest()
+      .getTree(uri);
+
+    if (tree) {
+      const edit = RefactorEditUtils.addImport(tree, moduleName, nameToImport);
+
+      if (edit) {
+        changes[uri].push(edit);
+      }
+    }
+
+    return {
+      diagnostics: [diagnostic],
+      edit: { changes },
+      kind: CodeActionKind.QuickFix,
+      title: nameToImport
+        ? `Import '${nameToImport}' from module "${moduleName}"`
+        : `Import module "${moduleName}"`,
+      isPreferred: true,
+    };
+  }
+
+  private createImportAllQuickFix(uri: string): CodeAction {
+    const changes: {
+      [uri: string]: TextEdit[];
+    } = {};
+    if (!changes[uri]) {
+      changes[uri] = [];
+    }
+
+    const tree = this.elmWorkspaceMatcher
+      .getElmWorkspaceFor(URI.parse(uri))
+      .getForest()
+      .getTree(uri);
+
+    const imports = this.neededImports.get(uri);
+
+    if (tree && imports) {
+      const edit = RefactorEditUtils.addImports(tree, imports);
+
+      if (edit) {
+        changes[uri].push(edit);
+      }
+    }
+
+    return {
+      diagnostics: imports?.map((data) => data.diagnostic),
+      edit: { changes },
+      kind: CodeActionKind.QuickFix,
+      title: `Add all missing imports`,
     };
   }
 
   private filterElmMakeDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
-    return diagnostics.filter(diagnostic => diagnostic.source === ELM_MAKE);
+    return diagnostics.filter((diagnostic) => diagnostic.source === ELM_MAKE);
   }
 
   private async checkForErrors(
@@ -162,7 +573,7 @@ export class ElmMakeDiagnostics {
   ): Promise<IElmIssue[]> {
     const settings = await this.settings.getClientSettings();
 
-    return new Promise(async (resolve, reject) => {
+    return new Promise(async (resolve) => {
       const relativePathToFile = path.relative(cwd, filename);
       const argsMake = [
         "make",

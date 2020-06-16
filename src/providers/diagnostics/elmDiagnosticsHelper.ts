@@ -11,11 +11,11 @@ export class ElmDiagnosticsHelper {
     return issues.reduce((acc, issue) => {
       const uri = this.getUriFromIssue(issue, elmWorkspaceFolder);
       const diagnostic = this.elmMakeIssueToDiagnostic(issue);
-      const arr = acc.get(uri) || [];
+      const arr = acc.get(uri) ?? [];
       arr.push(diagnostic);
       acc.set(uri, arr);
       return acc;
-    }, new Map());
+    }, new Map<string, Diagnostic[]>());
   }
 
   private static severityStringToDiagnosticSeverity(
@@ -35,11 +35,6 @@ export class ElmDiagnosticsHelper {
     issue: IElmIssue,
     elmWorkspaceFolder: URI,
   ): string {
-    if (issue.file.startsWith(".")) {
-      return URI.file(
-        path.join(elmWorkspaceFolder.fsPath, issue.file.slice(1)),
-      ).toString();
-    }
     return URI.file(
       path.join(elmWorkspaceFolder.fsPath, issue.file),
     ).toString();

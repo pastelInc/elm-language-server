@@ -1,5 +1,96 @@
 # Change Log
 
+## 1.8.3
+
+- Fixed bug that was causing problems with completions from external packages
+
+## 1.8.2
+
+- Fix problem on import generation for windows systems
+
+## 1.8.1
+
+- Fix imports form other files not showing up in some cases
+
+## 1.8.0
+
+- Add completions for possible imports
+- Scaffold case branches (use the new snippet and code action)
+- Sort auto imports by closest similar modules
+- Improve record field access completions
+- Remove exposing subscriptions in Browser.sandbox snippet
+- Fixed references to shadowed modules being potentially wrong
+- Don't use flatmap to be node 10 compatible (caused problems for npm package users)
+- Update elm-analyse
+- Update dependencies
+
+## 1.7.2
+
+- Add record access completions for types and nested types
+- Fix elm.json being ignored when paths are similar to another
+- Fix record field jump to definitions
+- Fix record field completions in some cases
+- Fix auto import not suggesting modules with multiple prefixes
+- Fix error where qualified names were not taken into account for definition resolving
+- Updated package rankings
+
+## 1.7.1
+
+- Fix exposing list params not getting completed for imports
+- Fix possible imports for packages not in ranking list
+- Prevent imports from getting out of date
+
+## 1.7.0
+
+- Add diagnostic on unknown symbols and offer importing via codeAction (needs the file to be save and the compiler to run)
+- Support exposing/unexposing functions and types via codeLense or codeAction
+- Add support for move function refactoring
+- Fix init taking long when using files with thousands of functions
+- Add new snippet for if-else conditions
+- Better completions for record update syntax
+- Added completions for basic keywords like if, then, else, let etc.
+- Improved hovers for types aliases
+- Added jump to definition for fields of records
+- Better handling of invalid renames
+
+## 1.6.3
+
+- Improved goto definition, find references and rename for anonymous functions, let definitions, destructured functions in let definitions, destructured parameters and case branches
+- Show comment from type for type constructor
+
+## 1.6.2
+
+- Fade unused symbols
+- Improved some codeAction texts
+
+## 1.6.1
+
+- Fix problem with formatting
+
+## 1.6.0
+
+- Add selection range handling
+- Add progress indicator for startup
+- Improved package ratings
+- Remove deleted files from diagnostics
+- Fix errors that could happen on startup
+- Fix interactions not working after ( or similar characters
+
+## 1.5.0
+
+- Add support for multiple elm.json files in a single project directory tree
+- Fix possible issue with server not recognising files in non-normalized
+  source-directories (containing "..").
+- Completions are now ranked better
+- Show code for types in completions/hovers
+- Fix elm analyse warnings not getting cleaned up correctly
+
+## 1.4.6
+
+- Fix type annotations not showing for local parameters
+- Fix files without module declaration not getting added to our index
+- Fix rename devouring Module prefixes
+
 ## 1.4.5
 
 - Improved completions for type annotations, functions, import and module statements
@@ -36,12 +127,7 @@
 - Fixed some problems with references not being correct
 - Get rid of crypto deprecation warnings
 
-- Updated tree-sitter syntax parsing
-	- Add glsl parsing
-	- Nest if/then/else expressions
-	- Let and in now correctly nest
-	- Change when block_comments are set, should now be better for annotations
-	- End functions/case as early as possible, so they don't include whitespace
+- Updated tree-sitter syntax parsing - Add glsl parsing - Nest if/then/else expressions - Let and in now correctly nest - Change when block_comments are set, should now be better for annotations - End functions/case as early as possible, so they don't include whitespace
 
 ## 1.3.2
 

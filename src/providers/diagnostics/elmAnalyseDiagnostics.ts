@@ -10,14 +10,18 @@ import {
   CodeActionParams,
   Diagnostic,
   DiagnosticSeverity,
+  DiagnosticTag,
   ExecuteCommandParams,
   IConnection,
-  TextDocument,
   TextEdit,
+  ApplyWorkspaceEditResponse,
 } from "vscode-languageserver";
+import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
+import { IElmWorkspace } from "../../elmWorkspace";
 import * as Diff from "../../util/diff";
-import { IClientSettings, Settings } from "../../util/settings";
+import { ElmWorkspaceMatcher } from "../../util/elmWorkspaceMatcher";
+import { Settings } from "../../util/settings";
 import { TextDocumentEvents } from "../../util/textDocumentEvents";
 import { DocumentFormattingProvider } from "../documentFormatingProvider";
 import * as utils from "../../util/elmUtils";
@@ -43,42 +47,50 @@ export interface IElmAnalyseEvents {
   on(event: "new-report", diagnostics: Map<string, Diagnostic[]>): this;
 }
 
-export class ElmAnalyseDiagnostics extends EventEmitter {
-  private connection: IConnection;
-  private elmWorkspace: URI;
-  private elmAnalyse: Promise<ElmApp>;
+export class ElmAnalyseDiagnostics {
+  private elmAnalysers: Map<IElmWorkspace, Promise<ElmApp>>;
   private diagnostics: Map<string, Diagnostic[]>;
   private filesWithDiagnostics: Set<string> = new Set();
-  private events: TextDocumentEvents;
-  private settings: Settings;
-  private formattingProvider: DocumentFormattingProvider;
+  private eventEmitter: EventEmitter = new EventEmitter();
+  private elmWorkspaceMatcher: ElmWorkspaceMatcher<URI>;
 
   constructor(
-    connection: IConnection,
-    elmWorkspace: URI,
-    events: TextDocumentEvents,
-    settings: Settings,
-    formattingProvider: DocumentFormattingProvider,
+    private connection: IConnection,
+    elmWorkspaces: IElmWorkspace[],
+    private events: TextDocumentEvents<TextDocument>,
+    private settings: Settings,
+    private formattingProvider: DocumentFormattingProvider,
   ) {
-    super();
-    this.connection = connection;
-    this.elmWorkspace = elmWorkspace;
     this.onExecuteCommand = this.onExecuteCommand.bind(this);
     this.onCodeAction = this.onCodeAction.bind(this);
-    this.events = events;
-    this.settings = settings;
-    this.formattingProvider = formattingProvider;
     this.diagnostics = new Map();
+    this.elmWorkspaceMatcher = new ElmWorkspaceMatcher(
+      elmWorkspaces,
+      (uri) => uri,
+    );
 
-    this.elmAnalyse = this.setupElmAnalyse();
+    this.elmAnalysers = new Map(
+      elmWorkspaces.map((ws) => [ws, this.setupElmAnalyse(ws)]),
+    );
   }
 
-  public updateFile(uri: URI, text?: string): void {
-    this.elmAnalyse.then(elmAnalyse => {
-      elmAnalyse.ports.fileWatch.send({
-        content: text || null,
+  public on(event: string | symbol, listener: (...args: any[]) => void): this {
+    this.eventEmitter.on(event, listener);
+    return this;
+  }
+
+  public async updateFile(uri: URI, text?: string): Promise<void> {
+    const workspace = this.elmWorkspaceMatcher.getElmWorkspaceFor(uri);
+    const analyser = this.elmAnalysers.get(workspace);
+    if (!analyser) {
+      throw new Error(`No elm-analyse instance loaded for workspace ${uri}.`);
+    }
+
+    await analyser.then((elmAnalyser) => {
+      elmAnalyser.ports.fileWatch.send({
+        content: text ?? null,
         event: "update",
-        file: path.relative(this.elmWorkspace.fsPath, uri.fsPath),
+        file: path.relative(workspace.getRootPath().fsPath, uri.fsPath),
       });
     });
   }
@@ -89,7 +101,7 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
     // The `CodeActionParams` will only have diagnostics for the region we were in, for the
     // "Fix All" feature we need to know about all of the fixable things in the document
     const fixableDiagnostics = this.fixableDiagnostics(
-      this.diagnostics.get(uri.toString()) || [],
+      this.diagnostics.get(uri.toString()) ?? [],
     );
 
     const fixAllInFile: CodeAction[] =
@@ -110,7 +122,7 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
 
     const contextDiagnostics: CodeAction[] = this.fixableDiagnostics(
       params.context.diagnostics,
-    ).map(diagnostic => {
+    ).map((diagnostic) => {
       const title = diagnostic.message.split("\n")[0];
       return {
         command: {
@@ -129,7 +141,9 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
       : [];
   }
 
-  public async onExecuteCommand(params: ExecuteCommandParams) {
+  public async onExecuteCommand(
+    params: ExecuteCommandParams,
+  ): Promise<ApplyWorkspaceEditResponse | undefined> {
     let uri: URI;
     switch (params.command) {
       case CODE_ACTION_ELM_ANALYSE:
@@ -165,7 +179,7 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
 
   private fixableDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
     return diagnostics.filter(
-      diagnostic =>
+      (diagnostic) =>
         diagnostic.source === ELM_ANALYSE && this.isFixable(diagnostic),
     );
   }
@@ -175,15 +189,9 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
    * id is provided it will fix the entire file.
    */
   private async fixer(uri: URI, diagnosticId?: number) {
-    const elmAnalyse = await this.elmAnalyse;
-    const settings = await this.settings.getClientSettings();
+    const elmWorkspace = this.elmWorkspaceMatcher.getElmWorkspaceFor(uri);
 
-    const edits = await this.getFixEdits(
-      elmAnalyse,
-      uri,
-      settings,
-      diagnosticId,
-    );
+    const edits = await this.getFixEdits(elmWorkspace, uri, diagnosticId);
 
     return this.connection.workspace.applyEdit({
       changes: {
@@ -193,13 +201,22 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
   }
 
   private async getFixEdits(
-    elmAnalyse: ElmApp,
+    elmWorkspace: IElmWorkspace,
     uri: URI,
-    settings: IClientSettings,
     code?: number,
   ): Promise<TextEdit[]> {
+    const elmAnalyse = await this.elmAnalysers.get(elmWorkspace);
+    const settings = await this.settings.getClientSettings();
+
+    if (!elmAnalyse) {
+      throw new Error(`No elm-analyse instance loaded for workspace ${uri}.`);
+    }
+
     const filePath = URI.parse(uri.toString()).fsPath;
-    const relativePath = path.relative(this.elmWorkspace.fsPath, filePath);
+    const relativePath = path.relative(
+      elmWorkspace.getRootPath().fsPath,
+      filePath,
+    );
 
     return new Promise((resolve, reject) => {
       // Naming the function here so that we can unsubscribe once we get the new file content
@@ -219,9 +236,13 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
         // diffs from there, this prevents needing to chain sets of edits
         resolve(
           this.formattingProvider
-            .formatText(settings.elmFormatPath, fixedFile.content)
+            .formatText(
+              elmWorkspace.getRootPath(),
+              settings.elmFormatPath,
+              fixedFile.content,
+            )
             .then(
-              async elmFormatEdits =>
+              async (elmFormatEdits) =>
                 await this.createEdits(
                   oldText.getText(),
                   fixedFile.content,
@@ -269,12 +290,12 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
     }
   }
 
-  private async setupElmAnalyse(): Promise<ElmApp> {
+  private async setupElmAnalyse(elmWorkspace: IElmWorkspace): Promise<ElmApp> {
     let elmVersion;
     try {
       elmVersion = await utils.getElmVersion(
         await this.settings.getClientSettings(),
-        this.elmWorkspace,
+        elmWorkspace.getRootPath(),
         this.connection,
       );
     } catch (e) {
@@ -282,7 +303,7 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
         `Could not figure out elm version, this will impact how good the server works. \n ${e.stack}`,
       );
     }
-    const fsPath = this.elmWorkspace.fsPath;
+    const fsPath = elmWorkspace.getRootPath().fsPath;
     const elmJson = await readFile(path.join(fsPath, this.elmJsonOrElmPackageJson(elmVersion)), {
       encoding: "utf-8",
     }).then(JSON.parse);
@@ -300,19 +321,22 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
     // read <dir>//elm.json instead of <div>/elm.json
     fileLoadingPorts.setup(elmAnalyse, {}, fsPath.replace(/[\\/]?$/, ""));
 
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       // Wait for elm-analyse to send back the first report
       const cb = (firstReport: any) => {
         elmAnalyse.ports.sendReportValue.unsubscribe(cb);
-        this.onNewReport(firstReport);
-        elmAnalyse.ports.sendReportValue.subscribe(this.onNewReport);
+        const onNewReport = this.onNewReportForWorkspace(elmWorkspace);
+        onNewReport(firstReport);
+        elmAnalyse.ports.sendReportValue.subscribe(onNewReport);
         resolve(elmAnalyse);
       };
       elmAnalyse.ports.sendReportValue.subscribe(cb);
     });
   }
 
-  private onNewReport = (report: Report) => {
+  private onNewReportForWorkspace = (elmWorkspace: IElmWorkspace) => (
+    report: Report,
+  ): void => {
     this.connection.console.info(
       `Received new elm-analyse report with ${report.messages.length} messages`,
     );
@@ -322,9 +346,9 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
     // each file and sends them as a batch
     this.diagnostics = report.messages.reduce((acc, message) => {
       const uri = URI.file(
-        path.join(this.elmWorkspace.fsPath, message.file),
+        path.join(elmWorkspace.getRootPath().fsPath, message.file),
       ).toString();
-      const arr = acc.get(uri) || [];
+      const arr = acc.get(uri) ?? [];
       arr.push(this.messageToDiagnostic(message));
       acc.set(uri, arr);
       return acc;
@@ -332,7 +356,7 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
     const filesInReport = new Set(this.diagnostics.keys());
     const filesThatAreNowFixed = new Set(
       [...this.filesWithDiagnostics].filter(
-        uriPath => !filesInReport.has(uriPath),
+        (uriPath) => !filesInReport.has(uriPath),
       ),
     );
 
@@ -340,12 +364,12 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
 
     // When you fix the last error in a file it no longer shows up in the report, but
     // we still need to clear the error marker for it
-    filesThatAreNowFixed.forEach(file => this.diagnostics.set(file, []));
-    this.emit("new-diagnostics", this.diagnostics);
+    filesThatAreNowFixed.forEach((file) => this.diagnostics.set(file, []));
+    this.eventEmitter.emit("new-diagnostics", this.diagnostics);
   };
 
   private isFixable(diagnostic: Diagnostic): boolean {
-    return fixableErrors.some(e => diagnostic.message.indexOf(e) > -1);
+    return fixableErrors.some((e) => diagnostic.message.includes(e));
   }
 
   private messageToDiagnostic(message: Message): Diagnostic {
@@ -366,7 +390,7 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
     const [lineStart, colStart, lineEnd, colEnd] =
       (message.data &&
         message.data.properties &&
-        message.data.properties.range) ||
+        message.data.properties.range) ??
       rangeDefaults;
 
     const range = {
@@ -383,6 +407,9 @@ export class ElmAnalyseDiagnostics extends EventEmitter {
       range,
       severity: DiagnosticSeverity.Warning,
       source: ELM_ANALYSE,
+      tags: message.data.description.startsWith("Unused ")
+        ? [DiagnosticTag.Unnecessary]
+        : undefined,
     };
   }
 
